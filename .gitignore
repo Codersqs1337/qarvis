@@ -1,0 +1,7 @@
+*.iml
+.gradle/
+local.properties
+.idea/
+build/
+app/src/main/assets/model-en-us/
+model.zip
