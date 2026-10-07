@@ -1,0 +1,418 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>Fairhand Golf Gloves</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Bricolage+Grotesque:opsz,wght@12..96,500;12..96,700;12..96,800&family=Figtree:wght@400;500;600&family=IBM+Plex+Mono:wght@500&display=swap">
+<style>
+/* Layout: sticky header, compact hero with a glove on a scorecard grid, filterable product grid, shipping zones table, slide-in cart */
+:root{
+  --bg:#F5F8F3; --surface:#FFFFFF; --sunk:#E8EFE6; --fg:#14241A; --muted:#55685B; --line:#D3DED2;
+  --accent:#1E6A3B; --accent-fg:#FFFFFF; --flag:#C99A00; --danger:#B3261E;
+  --display:"Bricolage Grotesque",ui-sans-serif,system-ui,sans-serif;
+  --body:"Figtree",ui-sans-serif,system-ui,-apple-system,"Segoe UI",sans-serif;
+  --mono:"IBM Plex Mono",ui-monospace,SFMono-Regular,Menlo,monospace;
+  --r:12px;
+}
+@media (prefers-color-scheme:dark){:root:not([data-theme="light"]){
+  --bg:#0D1611; --surface:#15211A; --sunk:#1B2A21; --fg:#E6EEE7; --muted:#9DB0A2; --line:#2A3B30;
+  --accent:#5DBD7D; --accent-fg:#0B1A10; --flag:#E2B93B; --danger:#F2867E; color-scheme:dark}}
+:root[data-theme="dark"]{
+  --bg:#0D1611; --surface:#15211A; --sunk:#1B2A21; --fg:#E6EEE7; --muted:#9DB0A2; --line:#2A3B30;
+  --accent:#5DBD7D; --accent-fg:#0B1A10; --flag:#E2B93B; --danger:#F2867E; color-scheme:dark}
+*{box-sizing:border-box}
+body{background:var(--bg);color:var(--fg);font:16px/1.55 var(--body)}
+h1,h2,h3{font-family:var(--display);line-height:1.1;text-wrap:balance;margin:0}
+a{color:var(--accent)}
+button,select,input{font:inherit;color:inherit}
+:focus-visible{outline:2px solid var(--accent);outline-offset:2px}
+.wrap{max-width:1180px;margin:0 auto;padding-inline:20px}
+.mono{font-family:var(--mono);font-variant-numeric:tabular-nums}
+.label{font-size:12px;letter-spacing:.08em;text-transform:uppercase;color:var(--muted);font-weight:600}
+
+/* header */
+header.top{position:sticky;top:env(safe-area-inset-top,0px);z-index:20;background:color-mix(in srgb,var(--bg) 88%,transparent);backdrop-filter:blur(8px);border-bottom:1px solid var(--line)}
+.bar{display:flex;align-items:center;gap:16px;padding-block:12px}
+.logo{font-family:var(--display);font-weight:800;font-size:22px;display:flex;align-items:center;gap:8px;text-decoration:none;color:var(--fg)}
+.logo svg{width:26px;height:26px}
+.bar nav{display:flex;gap:18px;margin-left:auto;flex-wrap:wrap}
+.bar nav a{color:var(--fg);text-decoration:none;font-weight:500}
+.bar nav a:hover{color:var(--accent)}
+.ship-to{display:flex;align-items:center;gap:6px;font-size:14px}
+.ship-to select{background:var(--surface);border:1px solid var(--line);border-radius:8px;padding:6px 8px;max-width:150px}
+.cart-btn{display:flex;align-items:center;gap:8px;background:var(--accent);color:var(--accent-fg);border:0;border-radius:999px;padding:8px 16px;font-weight:600;cursor:pointer}
+.cart-btn .count{background:var(--accent-fg);color:var(--accent);border-radius:999px;min-width:22px;padding:0 6px;font-size:13px;text-align:center}
+@media (max-width:760px){.bar nav{display:none}.ship-to span{display:none}.bar{gap:10px}.logo{font-size:19px;margin-right:auto}}
+
+/* hero */
+.hero{display:grid;grid-template-columns:1.1fr .9fr;gap:40px;align-items:center;padding-block:48px 36px}
+.hero h1{font-size:clamp(38px,6vw,72px);font-weight:800;letter-spacing:-.02em}
+.hero h1 em{font-style:normal;color:var(--accent)}
+.hero p{font-size:18px;color:var(--muted);max-width:52ch;margin:18px 0 26px}
+.cta{display:flex;gap:12px;flex-wrap:wrap}
+.btn{display:inline-flex;align-items:center;justify-content:center;gap:8px;border-radius:999px;padding:12px 22px;font-weight:600;cursor:pointer;text-decoration:none;border:1px solid var(--accent)}
+.btn.primary{background:var(--accent);color:var(--accent-fg)}
+.btn.ghost{background:transparent;color:var(--accent)}
+.facts{display:flex;gap:28px;flex-wrap:wrap;margin-top:28px}
+.facts div{display:flex;flex-direction:column}
+.facts b{font-family:var(--display);font-size:26px}
+.facts span{font-size:13px;color:var(--muted)}
+.hero-art{position:relative;aspect-ratio:1/1;max-width:100%;border-radius:24px;background:
+  repeating-linear-gradient(0deg,transparent 0 39px,var(--line) 39px 40px),
+  repeating-linear-gradient(90deg,transparent 0 39px,var(--line) 39px 40px),var(--sunk);overflow:hidden}
+.hero-art svg{position:absolute;inset:6% 8% 4% 8%;width:84%;height:90%}
+.hero-art .tag{position:absolute;left:16px;bottom:16px;background:var(--surface);border:1px solid var(--line);border-radius:10px;padding:8px 12px;font-size:13px}
+@media (max-width:820px){.hero{grid-template-columns:1fr;padding-block:28px}.hero-art{max-width:420px}}
+
+/* trust strip */
+.strip{display:grid;grid-template-columns:repeat(4,1fr);gap:1px;background:var(--line);border:1px solid var(--line);border-radius:var(--r);overflow:hidden;margin-block:8px 48px}
+.strip div{background:var(--surface);padding:16px 18px}
+.strip b{display:block;font-weight:600}
+.strip span{font-size:14px;color:var(--muted)}
+@media (max-width:820px){.strip{grid-template-columns:1fr 1fr}}
+
+/* shop */
+section{scroll-margin-top:80px}
+.head-row{display:flex;align-items:end;justify-content:space-between;gap:16px;flex-wrap:wrap;margin-bottom:18px}
+.head-row h2{font-size:clamp(28px,4vw,40px)}
+.filters{display:flex;gap:8px;flex-wrap:wrap}
+.chip{border:1px solid var(--line);background:var(--surface);border-radius:999px;padding:7px 14px;font-size:14px;cursor:pointer}
+.chip[aria-pressed="true"]{background:var(--fg);color:var(--bg);border-color:var(--fg)}
+.grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(250px,1fr));gap:20px}
+.card{background:var(--surface);border:1px solid var(--line);border-radius:var(--r);overflow:hidden;display:flex;flex-direction:column}
+.pic{position:relative;aspect-ratio:1/1;max-width:100%;display:grid;place-items:center;cursor:pointer;border:0;padding:0;width:100%}
+.pic svg{width:78%;height:78%;transition:transform .25s ease}
+.card:hover .pic svg{transform:rotate(-4deg) scale(1.04)}
+.badge{position:absolute;top:12px;left:12px;background:var(--surface);color:var(--fg);font-size:12px;font-weight:600;border-radius:999px;padding:4px 10px}
+.info{padding:14px 16px 16px;display:flex;flex-direction:column;gap:6px;flex:1}
+.info h3{font-size:19px;font-weight:700}
+.meta{font-size:13px;color:var(--muted)}
+.price-row{display:flex;align-items:center;justify-content:space-between;margin-top:auto;padding-top:10px}
+.price{font-family:var(--mono);font-size:18px}
+.add{background:var(--accent);color:var(--accent-fg);border:0;border-radius:999px;padding:8px 14px;font-weight:600;cursor:pointer}
+.swatches{display:flex;gap:4px}
+.swatches i{width:12px;height:12px;border-radius:50%;border:1px solid var(--line);display:block}
+.empty{padding:40px;text-align:center;color:var(--muted);grid-column:1/-1}
+
+/* sizes */
+.sizing{display:grid;grid-template-columns:1fr 1.2fr;gap:32px;margin-block:64px;align-items:start}
+.sizing p{color:var(--muted);max-width:56ch}
+.tbl{overflow-x:auto;border:1px solid var(--line);border-radius:var(--r);background:var(--surface)}
+table{border-collapse:collapse;width:100%;font-size:14px}
+th,td{padding:10px 14px;text-align:left;border-bottom:1px solid var(--line);white-space:nowrap}
+th{font-weight:600;background:var(--sunk)}
+tr:last-child td{border-bottom:0}
+td.mono{font-variant-numeric:tabular-nums}
+@media (max-width:820px){.sizing{grid-template-columns:1fr}}
+
+/* shipping */
+.zones{display:grid;grid-template-columns:repeat(auto-fit,minmax(200px,1fr));gap:16px;margin-top:18px}
+.zone{background:var(--surface);border:1px solid var(--line);border-radius:var(--r);padding:16px;display:flex;flex-direction:column;gap:6px}
+.zone.here{border-color:var(--accent);box-shadow:0 0 0 1px var(--accent)}
+.zone h3{font-size:17px}
+.zone .ct{font-size:13px;color:var(--muted)}
+.zone .row{display:flex;justify-content:space-between;font-size:14px}
+
+footer{border-top:1px solid var(--line);margin-top:72px;padding-block:28px;color:var(--muted);font-size:14px}
+footer .wrap{display:flex;gap:16px;justify-content:space-between;flex-wrap:wrap}
+
+/* drawers & modal */
+.scrim{position:fixed;inset:0;background:rgba(5,12,8,.5);z-index:40}
+.drawer{position:fixed;top:0;right:0;bottom:0;width:min(420px,100%);background:var(--bg);z-index:50;display:flex;flex-direction:column;border-left:1px solid var(--line);padding-top:env(safe-area-inset-top,0px);padding-bottom:env(safe-area-inset-bottom,0px)}
+.drawer header{display:flex;justify-content:space-between;align-items:center;padding:16px 20px;border-bottom:1px solid var(--line)}
+.drawer h2{font-size:22px}
+.x{background:none;border:1px solid var(--line);border-radius:999px;width:34px;height:34px;cursor:pointer;font-size:18px;line-height:1}
+.lines{flex:1;overflow:auto;padding:12px 20px;display:flex;flex-direction:column;gap:12px}
+.line{display:grid;grid-template-columns:64px 1fr auto;gap:12px;align-items:center;background:var(--surface);border:1px solid var(--line);border-radius:10px;padding:8px}
+.line .thumb{width:64px;height:64px;border-radius:8px;display:grid;place-items:center}
+.line .thumb svg{width:80%;height:80%}
+.line .nm{font-weight:600;font-size:15px}
+.line .sub{font-size:12px;color:var(--muted)}
+.qty{display:flex;align-items:center;gap:6px;margin-top:4px}
+.qty button{width:26px;height:26px;border-radius:6px;border:1px solid var(--line);background:var(--bg);cursor:pointer}
+.sum{border-top:1px solid var(--line);padding:16px 20px;display:flex;flex-direction:column;gap:6px}
+.sum .row{display:flex;justify-content:space-between}
+.sum .total{font-weight:700;font-size:18px}
+.sum .note{font-size:13px;color:var(--muted)}
+.modal{position:fixed;inset:0;z-index:60;display:grid;place-items:center;padding:16px;overflow:auto}
+.dialog{background:var(--bg);border:1px solid var(--line);border-radius:16px;width:min(860px,100%);max-height:calc(100vh - 32px);overflow:auto;position:relative}
+.dialog .x{position:absolute;top:12px;right:12px;background:var(--surface)}
+.pd{display:grid;grid-template-columns:1fr 1fr}
+.pd .pic{cursor:default;border-radius:16px 0 0 16px}
+.pd .body{padding:28px 24px;display:flex;flex-direction:column;gap:14px;min-width:0}
+.pd h2{font-size:30px}
+.opts{display:flex;gap:8px;flex-wrap:wrap}
+.opt{border:1px solid var(--line);background:var(--surface);border-radius:8px;padding:8px 12px;cursor:pointer;font-size:14px}
+.opt[aria-pressed="true"]{border-color:var(--accent);box-shadow:0 0 0 1px var(--accent);font-weight:600}
+@media (max-width:700px){.pd{grid-template-columns:1fr}.pd .pic{border-radius:16px 16px 0 0}}
+form.co{display:grid;grid-template-columns:1fr 1fr;gap:12px;padding:24px}
+form.co h2{grid-column:1/-1;font-size:26px}
+form.co label{display:flex;flex-direction:column;gap:4px;font-size:13px;font-weight:600}
+form.co .full{grid-column:1/-1}
+form.co input,form.co select{background:var(--surface);border:1px solid var(--line);border-radius:8px;padding:10px 12px;font-weight:400;font-size:15px}
+form.co input:invalid:not(:placeholder-shown){border-color:var(--danger)}
+.notice{grid-column:1/-1;background:var(--sunk);border-radius:10px;padding:12px 14px;font-size:14px}
+@media (max-width:560px){form.co{grid-template-columns:1fr}}
+.toast{position:fixed;left:50%;bottom:calc(20px + env(safe-area-inset-bottom,0px));transform:translateX(-50%);background:var(--fg);color:var(--bg);padding:10px 18px;border-radius:999px;z-index:70;font-weight:500;font-size:14px}
+@media (prefers-reduced-motion:reduce){*{transition:none!important}}
+</style>
+</head>
+<body>
+
+<header class="top">
+  <div class="wrap bar">
+    <a class="logo" href="#top" aria-label="Fairhand home">
+      <svg viewBox="0 0 32 32" aria-hidden="true"><circle cx="16" cy="16" r="14" fill="var(--accent)"/><path d="M13 7v18M13 7l9 4-9 4" stroke="var(--accent-fg)" stroke-width="2.2" fill="none" stroke-linejoin="round"/></svg>
+      Fairhand
+    </a>
+    <nav><a href="#shop">Shop</a><a href="#sizing">Size guide</a><a href="#shipping">Shipping</a></nav>
+    <label class="ship-to"><span class="label">Ship to</span><select id="country" aria-label="Ship to country"></select></label>
+    <button class="cart-btn" id="openCart" aria-label="Open cart">Cart <span class="count mono" id="cartCount">0</span></button>
+  </div>
+</header>
+
+<main id="top">
+  <div class="wrap">
+    <section class="hero">
+      <div>
+        <div class="label">Golf gloves · shipped to 40+ countries</div>
+        <h1>A better grip on <em>every swing.</em></h1>
+        <p>Cabretta leather, all-weather synthetics and rain pairs for men, women and juniors. Pick your hand and size, and we deliver to your door with tracking.</p>
+        <div class="cta"><a class="btn primary" href="#shop">Shop gloves</a><a class="btn ghost" href="#sizing">Find my size</a></div>
+        <div class="facts">
+          <div><b class="mono">12</b><span>glove styles</span></div>
+          <div><b class="mono">7–8</b><span>sizes incl. Cadet</span></div>
+          <div><b class="mono">$100+</b><span>free worldwide shipping</span></div>
+        </div>
+      </div>
+      <div class="hero-art" id="heroArt"><div class="tag"><b>Tour Cabretta</b> · 0.4 mm AA leather</div></div>
+    </section>
+
+    <div class="strip">
+      <div><b>Tracked worldwide delivery</b><span>5 shipping zones, rates shown at checkout</span></div>
+      <div><b>Right size or swap free</b><span>30-day size exchange</span></div>
+      <div><b>Left or right hand</b><span>Every glove in both hands</span></div>
+      <div><b>Secure checkout</b><span>Cards, PayPal, Apple Pay</span></div>
+    </div>
+
+    <section id="shop">
+      <div class="head-row">
+        <div><div class="label">The range</div><h2>Shop golf gloves</h2></div>
+        <div class="filters" role="group" aria-label="Filter gloves" id="filters"></div>
+      </div>
+      <div class="grid" id="grid"></div>
+    </section>
+
+    <section id="sizing" class="sizing">
+      <div>
+        <div class="label">Size guide</div>
+        <h2 style="font-size:clamp(28px,4vw,40px);margin-top:4px">Which hand, which size?</h2>
+        <p>A right-handed golfer wears the glove on the <b>left</b> hand (the lead hand). Left-handed golfers wear it on the right. Measure around your palm just below the knuckles, without the thumb. Cadet sizes suit shorter fingers and a wider palm.</p>
+      </div>
+      <div class="tbl">
+        <table>
+          <thead><tr><th>Size</th><th>Palm circumference</th><th>Hand length</th></tr></thead>
+          <tbody>
+            <tr><td>S</td><td class="mono">18.0–19.0 cm</td><td class="mono">17.5 cm</td></tr>
+            <tr><td>M</td><td class="mono">19.0–20.5 cm</td><td class="mono">18.5 cm</td></tr>
+            <tr><td>ML</td><td class="mono">20.5–21.5 cm</td><td class="mono">19.0 cm</td></tr>
+            <tr><td>L</td><td class="mono">21.5–23.0 cm</td><td class="mono">19.5 cm</td></tr>
+            <tr><td>XL</td><td class="mono">23.0–24.5 cm</td><td class="mono">20.5 cm</td></tr>
+            <tr><td>Cadet M / ML / L</td><td class="mono">same palm, fingers −0.6 cm</td><td class="mono">−0.6 cm</td></tr>
+            <tr><td>Junior S / M / L</td><td class="mono">14.0–18.0 cm</td><td class="mono">13.5–16.5 cm</td></tr>
+          </tbody>
+        </table>
+      </div>
+    </section>
+
+    <section id="shipping">
+      <div class="label">Delivery</div>
+      <h2 style="font-size:clamp(28px,4vw,40px);margin-top:4px">We ship to your country</h2>
+      <p style="color:var(--muted);max-width:60ch">Every order ships with tracking. Orders over <b class="mono">$100</b> ship free to every zone. Import duties may apply outside your zone's customs union.</p>
+      <div class="zones" id="zones"></div>
+    </section>
+  </div>
+</main>
+
+<footer><div class="wrap"><span>© 2026 Fairhand Golf Gloves</span><span>Prices in USD · Demo store: payments are not connected yet</span></div></footer>
+
+<div class="scrim" id="scrim" hidden></div>
+<aside class="drawer" id="cart" hidden aria-label="Cart">
+  <header><h2>Your cart</h2><button class="x" data-close aria-label="Close cart">×</button></header>
+  <div class="lines" id="lines"></div>
+  <div class="sum" id="sum"></div>
+</aside>
+<div class="modal" id="modal" hidden><div class="dialog" id="dialog" role="dialog" aria-modal="true"></div></div>
+<div class="toast" id="toast" hidden></div>
+
+<script>
+const ZONES=[
+  {id:1,name:"North America",rate:9.95,days:"4–7",countries:["United States","Canada","Mexico"]},
+  {id:2,name:"Europe & UK",rate:12.95,days:"5–9",countries:["United Kingdom","Ireland","Germany","France","Spain","Italy","Netherlands","Belgium","Portugal","Sweden","Denmark","Norway","Switzerland","Austria","Poland"]},
+  {id:3,name:"Middle East & Asia",rate:14.95,days:"6–11",countries:["United Arab Emirates","Saudi Arabia","Qatar","Pakistan","India","Japan","South Korea","China","Singapore","Malaysia","Thailand","Philippines"]},
+  {id:4,name:"Oceania",rate:15.95,days:"7–12",countries:["Australia","New Zealand"]},
+  {id:5,name:"Africa & South America",rate:19.95,days:"9–15",countries:["South Africa","Kenya","Nigeria","Egypt","Morocco","Brazil","Argentina","Chile","Colombia"]}
+];
+const FREE_OVER=100;
+const ADULT=["S","M","ML","L","XL"], CADET=["Cadet M","Cadet ML","Cadet L"], JUNIOR=["Junior S","Junior M","Junior L"];
+// p: palm, t: tab, a: accent stitching, bg: picture ground
+const P=[
+ {id:"tour-cabretta",name:"Tour Cabretta",price:26,mat:"Leather",who:"Men",hands:["Left","Right"],sizes:[...ADULT,...CADET],badge:"Best seller",c:{p:"#F7F6F1",t:"#1C2E5A",a:"#C9CDD6",bg:"#DCE6F0"},desc:"Thin 0.4 mm AA-grade Cabretta leather for maximum feel. Perforated fingers and a low-profile tab."},
+ {id:"tour-cabretta-w",name:"Tour Cabretta Women's",price:24,mat:"Leather",who:"Women",hands:["Left","Right"],sizes:["S","M","L"],c:{p:"#FBF7F5",t:"#D9577B",a:"#EBC3CF",bg:"#F6DFE6"},desc:"The tour leather glove cut for a slimmer hand with a shorter wrist closure."},
+ {id:"pro-perf",name:"Pro Perforated",price:28,mat:"Leather",who:"Men",hands:["Left","Right"],sizes:ADULT,badge:"New",c:{p:"#FFFFFF",t:"#151515",a:"#9A9A9A",bg:"#E2E2DE"},desc:"Laser perforation across the back of the hand keeps it cool in hot rounds."},
+ {id:"hybrid-flex",name:"Hybrid Flex",price:22,mat:"Hybrid",who:"Men",hands:["Left","Right"],sizes:[...ADULT,...CADET],c:{p:"#ECECE6",t:"#2F7A4A",a:"#7DAF8A",bg:"#D7E8D9"},desc:"Leather palm for grip, stretch synthetic back for fit. Lasts twice as long as full leather."},
+ {id:"all-weather",name:"All-Weather Grip",price:19,mat:"Synthetic",who:"Unisex",hands:["Left","Right"],sizes:ADULT,c:{p:"#2A2A2C",t:"#3A3A3E",a:"#E35A2F",bg:"#E7DED8"},desc:"Durable microfibre that keeps its grip when damp. Machine washable."},
+ {id:"rain-pair",name:"Rain Grip Pair",price:30,mat:"Synthetic",who:"Unisex",hands:["Pair"],sizes:ADULT,badge:"Pair",c:{p:"#1F2D4D",t:"#14203A",a:"#5D86D6",bg:"#D5DEF0"},desc:"Sold as a pair. Grips harder the wetter it gets. Keep a set in your bag for showers."},
+ {id:"winter-pair",name:"Winter Thermal Pair",price:34,mat:"Synthetic",who:"Unisex",hands:["Pair"],sizes:ADULT,badge:"Pair",c:{p:"#5B4636",t:"#3B2C21",a:"#C6A07A",bg:"#EADFD2"},desc:"Brushed fleece lining and a longer cuff for cold-weather golf. Sold as a pair."},
+ {id:"desert",name:"Desert Breathable",price:20,mat:"Hybrid",who:"Unisex",hands:["Left","Right"],sizes:ADULT,c:{p:"#E3D3B3",t:"#8C6A3A",a:"#B89A69",bg:"#F1E6CF"},desc:"Mesh knuckle panels and moisture-wicking lining for hot, humid courses."},
+ {id:"color-pop",name:"Color Pop",price:18,mat:"Synthetic",who:"Unisex",hands:["Left","Right"],sizes:ADULT,c:{p:"#D93A2B",t:"#FFFFFF",a:"#F2A49C",bg:"#F7D9D3"},desc:"Bright, soft synthetic that stands out on the tee. Also comes in a gift box."},
+ {id:"classic-syn",name:"Classic Synthetic",price:15,mat:"Synthetic",who:"Unisex",hands:["Left","Right"],sizes:ADULT,c:{p:"#FAFAF7",t:"#1E6A3B",a:"#A7C9B1",bg:"#DDEBDF"},desc:"The everyday glove at an everyday price. Soft, flexible and easy to wash."},
+ {id:"junior",name:"Junior Cadet",price:14,mat:"Synthetic",who:"Junior",hands:["Left","Right"],sizes:JUNIOR,c:{p:"#F4C430",t:"#1E3A8A",a:"#FFE58A",bg:"#FBEFC4"},desc:"Sized for golfers aged 5 to 13 with a grip that holds up in practice."},
+ {id:"tour-3pack",name:"Tour Cabretta 3-Pack",price:69,mat:"Leather",who:"Men",hands:["Left","Right"],sizes:[...ADULT,...CADET],badge:"Save $9",c:{p:"#F7F6F1",t:"#1E6A3B",a:"#C9CDD6",bg:"#E0EADF"},pack:3,desc:"Three Tour Cabretta gloves in one size. The way most low handicappers buy them."}
+];
+
+function glove(c,{hand="Left",pack=0,big=false}={}){
+  const flip=hand==="Right";
+  const one=(dx,dy,s)=>`<g transform="translate(${dx} ${dy}) scale(${s})">
+    <path d="M60 205 L60 112 Q60 96 70 92 L70 44 Q70 32 81 32 Q92 32 92 44 L92 86 L96 86 L96 26 Q96 14 108 14 Q120 14 120 26 L120 86 L124 86 L124 32 Q124 20 135 20 Q146 20 146 32 L146 92 L150 92 L150 52 Q150 42 160 42 Q170 42 170 52 L170 140 Q170 170 156 186 L156 205 Z" fill="${c.p}" stroke="rgba(0,0,0,.18)" stroke-width="1.5"/>
+    <path d="M62 140 Q40 128 30 104 Q24 90 34 84 Q44 80 50 92 Q58 108 66 112" fill="${c.p}" stroke="rgba(0,0,0,.18)" stroke-width="1.5"/>
+    <g stroke="${c.a}" stroke-width="1.6" fill="none" stroke-dasharray="3 3">
+      <path d="M92 50 V88"/><path d="M120 40 V88"/><path d="M146 46 V94"/>
+      <path d="M68 196 H160"/></g>
+    <g fill="${c.a}">${[0,1,2].map(i=>`<circle cx="${81}" cy="${46+i*9}" r="1.6"/><circle cx="${108}" cy="${30+i*9}" r="1.6"/><circle cx="${135}" cy="${36+i*9}" r="1.6"/><circle cx="${160}" cy="${58+i*9}" r="1.6"/>`).join("")}</g>
+    <rect x="58" y="172" width="104" height="36" rx="8" fill="${c.t}"/>
+    <rect x="96" y="164" width="60" height="26" rx="13" fill="${c.t}" stroke="rgba(255,255,255,.35)" stroke-width="1.5"/>
+    <circle cx="138" cy="177" r="7" fill="${c.p}" stroke="${c.a}" stroke-width="1.5"/>
+    <path d="M134 177 h8" stroke="${c.t}" stroke-width="1.5"/>
+  </g>`;
+  let body;
+  if(hand==="Pair") body=`<g transform="translate(-14 6)">${one(0,10,.9)}</g><g transform="translate(214 6) scale(-1 1)">${one(0,-4,.9)}</g>`;
+  else if(pack) body=[2,1,0].map(i=>`<g opacity="${1-i*.18}">${one(i*14,i*-6,.92)}</g>`).join("");
+  else body=one(0,0,1);
+  const mirror=flip?`transform="translate(200 0) scale(-1 1)"`:"";
+  return `<svg viewBox="0 0 200 230" role="img" aria-label="${hand} hand golf glove"><ellipse cx="108" cy="216" rx="62" ry="8" fill="rgba(0,0,0,.12)"/><g ${mirror}>${body}</g></svg>`;
+}
+function ballSVG(){return `<circle cx="168" cy="196" r="18" fill="#FFFFFF" stroke="rgba(0,0,0,.2)"/>`+[[162,190],[170,188],[176,195],[164,199],[172,203],[158,197]].map(([x,y])=>`<circle cx="${x}" cy="${y}" r="1.8" fill="rgba(0,0,0,.14)"/>`).join("")}
+
+const $=s=>document.querySelector(s);
+const money=n=>"$"+n.toFixed(2);
+const store={get(k,d){try{return JSON.parse(localStorage.getItem(k))??d}catch{return d}},set(k,v){try{localStorage.setItem(k,JSON.stringify(v))}catch{}}};
+let cart=store.get("fh-cart",[]);
+let country=store.get("fh-country","United States");
+let filter="All";
+
+// hero
+$("#heroArt").insertAdjacentHTML("afterbegin",glove(P[0].c).replace("</svg>",ballSVG()+"</svg>"));
+
+// country select
+const allCountries=ZONES.flatMap(z=>z.countries).sort();
+$("#country").innerHTML=allCountries.map(c=>`<option ${c===country?"selected":""}>${c}</option>`).join("");
+$("#country").onchange=e=>{country=e.target.value;store.set("fh-country",country);renderZones();renderCart();toast("Shipping to "+country)};
+const zoneOf=c=>ZONES.find(z=>z.countries.includes(c));
+
+function renderZones(){
+  const here=zoneOf(country);
+  $("#zones").innerHTML=ZONES.map(z=>`<div class="zone ${z===here?"here":""}">
+    <div class="label">Zone ${z.id}${z===here?" · your zone":""}</div><h3>${z.name}</h3>
+    <div class="row"><span>Standard tracked</span><b class="mono">${money(z.rate)}</b></div>
+    <div class="row"><span>Delivery time</span><b class="mono">${z.days} days</b></div>
+    <div class="ct">${z.countries.join(", ")}</div></div>`).join("");
+}
+
+// filters
+const FILTERS=["All","Leather","Hybrid","Synthetic","Women","Junior","Pairs"];
+$("#filters").innerHTML=FILTERS.map(f=>`<button class="chip" aria-pressed="${f===filter}" data-f="${f}">${f}</button>`).join("");
+$("#filters").onclick=e=>{const b=e.target.closest("[data-f]");if(!b)return;filter=b.dataset.f;document.querySelectorAll("#filters .chip").forEach(c=>c.setAttribute("aria-pressed",c===b));renderGrid()};
+const match=p=>filter==="All"||p.mat===filter||p.who===filter||(filter==="Pairs"&&p.hands[0]==="Pair");
+
+function renderGrid(){
+  const list=P.filter(match);
+  $("#grid").innerHTML=list.length?list.map(p=>`<article class="card">
+    <button class="pic" style="background:${p.c.bg}" data-open="${p.id}" aria-label="View ${p.name}">${glove(p.c,{hand:p.hands[0],pack:p.pack})}${p.badge?`<span class="badge">${p.badge}</span>`:""}</button>
+    <div class="info">
+      <div class="meta">${p.mat} · ${p.who}${p.hands[0]==="Pair"?" · sold as pair":""}</div>
+      <h3>${p.name}</h3>
+      <div class="meta">${p.desc.split(". ")[0]}.</div>
+      <div class="price-row"><span class="price">${money(p.price)}</span><button class="add" data-open="${p.id}">Choose size</button></div>
+    </div></article>`).join(""):`<div class="empty">No gloves match this filter.</div>`;
+}
+document.addEventListener("click",e=>{const o=e.target.closest("[data-open]");if(o)openProduct(o.dataset.open)});
+
+// product modal
+function openProduct(id){
+  const p=P.find(x=>x.id===id); let hand=p.hands[0], size=null;
+  const draw=()=>{
+    $("#dialog").innerHTML=`<button class="x" data-close aria-label="Close">×</button><div class="pd">
+      <div class="pic" style="background:${p.c.bg}">${glove(p.c,{hand,pack:p.pack})}</div>
+      <div class="body">
+        <div class="label">${p.mat} · ${p.who}</div><h2>${p.name}</h2>
+        <div class="price" style="font-size:24px">${money(p.price)}</div>
+        <p style="margin:0;color:var(--muted)">${p.desc}</p>
+        ${p.hands.length>1?`<div><div class="label" style="margin-bottom:6px">Hand</div><div class="opts">${p.hands.map(h=>`<button class="opt" aria-pressed="${h===hand}" data-hand="${h}">${h} hand <span class="meta">(${h==="Left"?"right-handed golfer":"left-handed golfer"})</span></button>`).join("")}</div></div>`:""}
+        <div><div class="label" style="margin-bottom:6px">Size</div><div class="opts">${p.sizes.map(s=>`<button class="opt mono" aria-pressed="${s===size}" data-size="${s}">${s}</button>`).join("")}</div></div>
+        <button class="btn primary" id="addBtn">${size?"Add to cart · "+money(p.price):"Select a size"}</button>
+        <div class="meta">Ships to ${country} in ${zoneOf(country).days} days</div>
+      </div></div>`;
+    $("#dialog").querySelectorAll("[data-hand]").forEach(b=>b.onclick=()=>{hand=b.dataset.hand;draw()});
+    $("#dialog").querySelectorAll("[data-size]").forEach(b=>b.onclick=()=>{size=b.dataset.size;draw()});
+    $("#addBtn").onclick=()=>{if(!size){$("#addBtn").textContent="Pick a size first";return}addToCart(p,hand,size);closeAll();toast(`Added ${p.name} (${hand}, ${size})`)};
+  };
+  draw(); $("#modal").hidden=false; $("#scrim").hidden=false;
+}
+
+// cart
+function addToCart(p,hand,size){const key=p.id+"|"+hand+"|"+size;const l=cart.find(x=>x.key===key);l?l.qty++:cart.push({key,id:p.id,hand,size,qty:1});saveCart()}
+function saveCart(){store.set("fh-cart",cart);renderCart()}
+function totals(){const sub=cart.reduce((s,l)=>s+P.find(p=>p.id===l.id).price*l.qty,0);const z=zoneOf(country);const ship=!cart.length?0:sub>=FREE_OVER?0:z.rate;return{sub,ship,total:sub+ship,z}}
+function renderCart(){
+  $("#cartCount").textContent=cart.reduce((s,l)=>s+l.qty,0);
+  $("#lines").innerHTML=cart.length?cart.map((l,i)=>{const p=P.find(x=>x.id===l.id);return `<div class="line">
+    <div class="thumb" style="background:${p.c.bg}">${glove(p.c,{hand:l.hand,pack:p.pack})}</div>
+    <div><div class="nm">${p.name}</div><div class="sub">${l.hand} hand · ${l.size}</div>
+      <div class="qty"><button data-q="${i}" data-d="-1" aria-label="Decrease">−</button><span class="mono">${l.qty}</span><button data-q="${i}" data-d="1" aria-label="Increase">+</button></div></div>
+    <div class="mono">${money(p.price*l.qty)}</div></div>`}).join(""):`<div class="empty">Your cart is empty. <a href="#shop" data-close>Browse gloves</a></div>`;
+  const t=totals();
+  $("#sum").innerHTML=`<div class="row"><span>Subtotal</span><span class="mono">${money(t.sub)}</span></div>
+    <div class="row"><span>Shipping to ${country}</span><span class="mono">${t.ship===0&&cart.length?"Free":money(t.ship)}</span></div>
+    <div class="row total"><span>Total</span><span class="mono">${money(t.total)}</span></div>
+    <div class="note">${t.sub<FREE_OVER&&cart.length?`Add ${money(FREE_OVER-t.sub)} more for free shipping. `:""}Arrives in ${t.z.days} days.</div>
+    <button class="btn primary" id="checkout" ${cart.length?"":"disabled"}>Checkout</button>`;
+  $("#checkout").onclick=checkout;
+}
+$("#lines").onclick=e=>{const b=e.target.closest("[data-q]");if(!b)return;const l=cart[+b.dataset.q];l.qty+=+b.dataset.d;if(l.qty<1)cart.splice(+b.dataset.q,1);saveCart()};
+$("#openCart").onclick=()=>{$("#cart").hidden=false;$("#scrim").hidden=false};
+
+function checkout(){
+  const t=totals();
+  $("#cart").hidden=true;
+  $("#dialog").innerHTML=`<button class="x" data-close aria-label="Close">×</button><form class="co" id="coForm">
+    <h2>Delivery details</h2>
+    <label>Full name<input id="co-name" required placeholder="Alex Morgan" autocomplete="name"></label>
+    <label>Email<input id="co-email" type="email" required placeholder="you@example.com" autocomplete="email"></label>
+    <label class="full">Street address<input id="co-addr" required placeholder="12 Fairway Road" autocomplete="street-address"></label>
+    <label>City<input id="co-city" required placeholder="City" autocomplete="address-level2"></label>
+    <label>Postal code<input id="co-zip" required placeholder="Postal code" autocomplete="postal-code"></label>
+    <label class="full">Country<select id="co-country">${allCountries.map(c=>`<option ${c===country?"selected":""}>${c}</option>`).join("")}</select></label>
+    <div class="notice">Order total <b class="mono">${money(t.total)}</b> incl. <span class="mono">${t.ship?money(t.ship):"free"}</span> shipping (Zone ${t.z.id}, ${t.z.days} days).<br>This is a demo store: payment is not connected yet, so no card is charged.</div>
+    <button class="btn primary full" type="submit">Place order</button></form>`;
+  $("#co-country").onchange=e=>{country=e.target.value;$("#country").value=country;store.set("fh-country",country);renderZones();renderCart();checkout()};
+  $("#coForm").onsubmit=e=>{e.preventDefault();const n=$("#co-name").value.split(" ")[0];const no="FH-"+Math.floor(100000+Math.random()*900000);
+    $("#dialog").innerHTML=`<button class="x" data-close aria-label="Close">×</button><div style="padding:32px 24px;display:flex;flex-direction:column;gap:10px">
+      <div class="label">Order ${no}</div><h2 style="font-size:28px">Thanks, ${n}. Your gloves are on the way.</h2>
+      <p style="color:var(--muted);margin:0">Delivery to ${country} in ${t.z.days} days. Total <span class="mono">${money(t.total)}</span>. (Demo: no payment taken, no email sent.)</p></div>`;
+    cart=[];saveCart()};
+  $("#modal").hidden=false;$("#scrim").hidden=false;
+}
+
+function closeAll(){$("#modal").hidden=true;$("#cart").hidden=true;$("#scrim").hidden=true}
+document.addEventListener("click",e=>{if(e.target.closest("[data-close]")||e.target===$("#scrim")||e.target===$("#modal"))closeAll()});
+document.addEventListener("keydown",e=>{if(e.key==="Escape")closeAll()});
+let tt;function toast(m){const t=$("#toast");t.textContent=m;t.hidden=false;clearTimeout(tt);tt=setTimeout(()=>t.hidden=true,2200)}
+
+renderZones();renderGrid();renderCart();
+</script>
+</body>
+</html>
