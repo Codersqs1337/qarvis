@@ -2899,3 +2899,172 @@ zero-for-hunter" trap: a missing header may matter to a compliance auditor and p
   Your time is the scarce asset — spend it on provable, payable, in-scope impact.
 
 ---
+
+## IX.5 OWASP Top 10 (2021) walk-through — mapped to this file
+
+The OWASP Top 10 is the industry's shared risk taxonomy — know it cold for reports,
+triage language, and compliance conversations. The **2021** list is still the canonical
+reference (a newer edition reportedly folds SSRF into Broken Access Control and adds
+categories — check owasp.org for the current cut). Each category below maps to the
+deep sections already in this file, with the hunter angle.
+
+- **A01 — Broken Access Control.** *The #1 risk (found in ~94% of tested apps).* IDOR,
+  BOLA/BFLA, missing function-level checks, path-normalization and verb/header bypasses,
+  mass assignment. → **§23, §24.** *Hunter:* **Tier S/A, highest-yield class in
+  bounty** — mechanical, automatable, mass-impact.
+- **A02 — Cryptographic Failures** (was "Sensitive Data Exposure"). Weak/missing
+  encryption in transit or at rest, weak hashing/randomness, hardcoded keys, plaintext
+  secrets, predictable tokens. → ties into **§19** (JWT secret cracking, predictable
+  reset tokens), **§33** (leaked secrets). *Hunter:* pays when it yields a concrete
+  secret/ATO; "weak cipher suite" alone is often Tier C.
+- **A03 — Injection.** SQLi, NoSQLi, command, LDAP/XPath, **and XSS** (OWASP files XSS
+  here). → **§17, §18, §36, §38, §25.** *Hunter:* **Tier S** for server-side injection
+  (RCE/data), Tier A/B for XSS by type.
+- **A04 — Insecure Design.** Flaws in the design itself — missing threat modeling,
+  broken workflows, **business-logic** holes no amount of clean code fixes. → **§30.**
+  *Hunter:* **Tier A, high-value and hard to dup** (uniquely human to find) when it moves
+  money/state.
+- **A05 — Security Misconfiguration.** Default creds, open cloud buckets, debug/actuator
+  endpoints, directory listing, verbose errors, over-permissive CORS, **XXE** (OWASP
+  files XXE here). → **§33, §28, §22.** *Hunter:* mixed — the config that leaks a secret
+  or exposes admin is Tier A; "missing header" is Tier C.
+- **A06 — Vulnerable & Outdated Components.** Known-CVE libraries/frameworks/servers,
+  unpatched dependencies. → recon/fingerprint (**§VI.2**), **§21** (deserialization
+  gadgets live in libraries). *Hunter:* an exploitable known CVE on a live asset (RCE/
+  auth bypass) is Tier S; "outdated jQuery" with no exploit is Tier C.
+- **A07 — Identification & Authentication Failures.** Weak auth, credential stuffing,
+  broken session management, flawed MFA/reset, JWT/OAuth/SAML errors. → **§19, §40,
+  §45.** *Hunter:* **Tier S** when it yields arbitrary-user ATO.
+- **A08 — Software & Data Integrity Failures.** Insecure deserialization, unsigned/
+  unverified updates, **CI/CD and supply-chain** compromise, dependency confusion. →
+  **§21, §46.** *Hunter:* **Tier S** (RCE / mass supply-chain impact).
+- **A09 — Security Logging & Monitoring Failures.** Missing/insufficient logging and
+  alerting; lets attacks go undetected. *Hunter:* almost never directly rewardable
+  (**Tier C**) — it's a defense gap, not an exploit. Note for the report; don't hunt it
+  for pay. (Classic "matters to the company, pays the hunter nothing.")
+- **A10 — Server-Side Request Forgery (SSRF).** Promoted to the Top 10 on community vote.
+  → **§20.** *Hunter:* **Tier S** when it reaches cloud metadata/internal services.
+
+**Also learn the OWASP API Security Top 10** (BOLA, broken auth, BFLA, excessive data
+exposure, mass assignment, etc.) — modern targets are API-first and these map directly
+to the biggest, most-dup-resistant API payouts (§23, §43).
+
+---
+
+## IX.6 Real-world web case catalog (patterns to internalize)
+
+Each entry: **what broke → class → why it mattered.** Figures/details from public
+writeups and disclosures — **verify before citing.** The lesson is the *pattern* and the
+*chain*, not the dollar amount.
+
+**Breaches that defined classes:**
+- **Capital One — 2019, ~100M records.** **SSRF → EC2 instance metadata → IAM creds →
+  S3 exfiltration** (§20). The textbook SSRF-to-cloud chain; ~$190M in costs/fines.
+  *Lesson:* SSRF is a breach multiplier, and cloud metadata is the crown jewel.
+- **Equifax — 2017, ~147M records.** Unpatched Apache Struts RCE (**A06**, known CVE).
+  *Lesson:* a single outdated component = nation-scale PII breach, massive fines.
+- **Heartland / numerous retail/telecom dumps.** **SQL injection** (§17) mass data
+  theft. *Lesson:* injection remains catastrophic decades on.
+- **Confluence / many enterprise apps — repeated SSTI/OGNL and deserialization RCEs**
+  (§35, §21). *Lesson:* template/deserialization sinks are reliable pre-auth RCE.
+
+**Bug-bounty writeups worth studying (patterns > payouts):**
+- **HackerOne triager session-cookie leak — ~$20k.** A reply exposed a valid session
+  cookie → account access. *Lesson:* session tokens leak in the unlikeliest places;
+  check every response for secrets.
+- **OAuth CSRF + postMessage + clickjacking → full account takeover.** A single OAuth
+  CSRF "failed" alone, but **chained** with `postMessage` abuse and clickjacking it
+  became ATO (§19, §26, §41). *Lesson:* the chain is the bug — don't discard a dead-end
+  primitive.
+- **Shopify trailing-dot FQDN takeover — ~$3,100.** A trailing dot (`host.`) in the FQDN
+  defeated host validation across all wholesale customer domains (§40, §42). *Lesson:*
+  parser/normalization quirks (trailing dots, case, encoding) break host allowlists.
+- **GitLab webhook SSRF via DNS rebinding — ~$3,500** (H1 #632101). A blocklist SSRF
+  defeated by **DNS rebinding** (§20). *Lesson:* resolve-then-check is TOCTOU-broken;
+  rebinding is the go-to blocklist bypass.
+- **Nextcloud IDOR → remote-wipe another user's device — ~$500** (H1 #819807). Plain
+  **IDOR** (§23) with a scary action behind it. *Lesson:* IDOR severity = the action it
+  unlocks, not the bug's complexity.
+- **OAuth "Dynamic Client Registration: SSRF by design" & `redirect_uri` session
+  poisoning.** Protocol-level OAuth research (§19, §20). *Lesson:* the auth protocols
+  themselves have design-level holes — learn them deeply; they pay the most.
+
+**Macro context:** Broken Access Control tops OWASP (in ~94% of apps), injection and
+auth failures remain perennial, and **API-first** architectures have made BOLA/IDOR the
+most dependable high-impact bounty class. The web hasn't run out of bugs — the surface
+grew (APIs, SPAs, cloud, OAuth everywhere) faster than the defenses.
+
+---
+
+## IX.7 Chaining playbooks (how small bugs become big payouts)
+
+A single "low" is often a step. These are canonical chains Qarvis should actively try to
+assemble — proving the *end* of the chain is what earns Tier-S money.
+
+1. **Open redirect → OAuth token/code theft → account takeover.** Find an open redirect
+   (§29) on an allowlisted domain; use it as the `redirect_uri` (or its redirect target)
+   so the OAuth `code`/token lands on your host (§19) → full ATO. (A bare open redirect
+   is Tier C; this chain is Tier S.)
+2. **XSS → CSRF-token / session theft → ATO.** Stored/reflected XSS (§25) reads the
+   anti-CSRF token or acts in-session; perform a sensitive state change (email/password)
+   → ATO. `HttpOnly` blocks cookie reads but **not in-session actions**.
+3. **SSRF → cloud metadata → IAM creds → cloud account takeover.** SSRF (§20) hits
+   `169.254.169.254` (bypass filters with IP-encoding/IPv6/DNS-rebind/redirect) → steal
+   role creds → pivot into the cloud account/S3 (the Capital One pattern).
+4. **IDOR/info-leak → admin/privileged function → full control.** A leaked ID or an
+   unguessable-but-exposed reference (§23) unlocks an admin BFLA endpoint (§24) →
+   tenant/admin takeover.
+5. **Subdomain takeover → cookie/session theft / OAuth redirect / phishing.** Dangling
+   DNS (§42) on a same-site subdomain → read `Domain=.site.com` cookies, satisfy CORS/
+   OAuth allowlists, bypass `SameSite` → ATO.
+6. **Host-header / password-reset poisoning → arbitrary-user ATO.** Poison the reset link
+   via `Host`/`X-Forwarded-Host` (§40) so the victim's reset token is delivered to you.
+7. **CORS misconfig (reflects Origin + credentials) → cross-origin data/token exfil →
+   ATO** (§28).
+8. **File upload → web shell → RCE** (§31); or **SSTI/deserialization/command injection
+   → RCE** (§35/§21/§18) → server + internal network compromise.
+9. **Request smuggling → front-end access-control bypass / cache poisoning / session
+   hijack** (§34) — infrastructure-level, mass cross-user impact.
+10. **Race condition → limit/balance bypass → financial loss** (§27) — coupon/withdrawal/
+    vote overrun via single-packet parallelism.
+
+**Chaining mindset:** after *every* finding, ask **"what does this unlock?"** Keep a
+bag of primitives (a redirect here, a reflected value there, a leaked ID, a spoofable
+header) and assemble them. Triage pays for the destination, not the first step.
+
+---
+
+## IX.8 ✅ DONE WITH WEB (OWASP)
+
+Web coverage is now comprehensive and hunter-first:
+- **Classes with full bypasses:** Parts **II (§17–§34)** and **V (§35–§46)** — SQLi,
+  command injection, auth bypass, SSRF, deserialization, XXE, broken access control/
+  IDOR, privesc, XSS, CSRF, race conditions, CORS, open redirect, business logic, file
+  upload, traversal, misconfig, smuggling/cache, SSTI, NoSQLi, prototype pollution,
+  LDAP/XPath, CRLF, host-header, clickjacking, subdomain takeover, GraphQL, WebSocket,
+  auth-flow abuse, dependency confusion.
+- **This part (IX):** web infrastructure model, bounty economics + ineligible-findings
+  reality, the **hunter priority lens** (Tier S/A/B/C), impact tri-view, the **OWASP Top
+  10 map**, a **real-world case catalog**, and **ten chaining playbooks**.
+
+**Web hunter's one-screen summary:**
+1. **Recon first** — find the surface others missed (JS, old API versions, subdomains,
+   new features, private scope).
+2. **Tier S first:** RCE, full-read injection, arbitrary-user ATO/auth bypass, SSRF→cloud,
+   mass IDOR/broken-access-control.
+3. **Chain everything** (§IX.7) and **prove cross-user/real impact** — triage pays for the
+   destination.
+4. **Skip the unpaid stuff** (missing headers, self-XSS, logout CSRF, theoretical, A09
+   logging) — note it, don't grind.
+5. **Rules are sacred:** in-scope only, minimal non-destructive PoC, no real user data,
+   responsible disclosure. Reputation is the real bankroll.
+
+> **Status:** Web3 (Parts I, VIII) ✅ and Web/OWASP (Parts II, V, IX) ✅ are both
+> complete, each with infrastructure model, bounty economics, hunter-first priority
+> lens, full per-class bypasses, real-world case catalogs, and chaining playbooks — plus
+> recon/methodology (VI), mobile/Android (VII), the Why-This-Matters framework (III), and
+> quick-reference checklists (IV). The knowledge base is a complete, self-contained
+> offensive-reasoning brain for Qarvis. Tell me any area to go deeper on next
+> (e.g. cloud/K8s, API Top 10 expansion, a tooling cookbook, or report-writing templates).
+
+---
