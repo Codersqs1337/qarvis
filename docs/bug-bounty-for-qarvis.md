@@ -2709,3 +2709,193 @@ defenses, **bypasses**, impact for company/user/hunter, and a hunter-priority ti
 > the word and I'll continue with web.
 
 ---
+
+# PART IX — WEB ("WEB2") DEEP DIVE (OWASP, how it works, how the bounty works, hunter-first)
+
+> The web bug *classes* are already in **Parts II (§17–§34) and V (§35–§46)** — full
+> detection/defenses/**bypasses** for each. This part is the Web3-style wrapper around
+> them: how the web **infrastructure** works, how web **bug bounty** pays, a
+> **hunter-first priority lens**, an **OWASP Top 10** map, a **real-world case
+> catalog**, and the **chaining playbooks** that turn small bugs into big payouts.
+> Organizing question stays: *"what does this mean for me, the hunter?"*
+
+---
+
+## IX.1 How web infrastructure actually works (the terrain you attack)
+
+**The request/response spine.** A browser (or app) sends an **HTTP request**
+(method, path, headers, body) to a server; the server returns a **response**. Everything
+you attack is an input in that request (URL, query, path, headers, cookies, body/JSON)
+reaching a sink on the server or back in the browser. **You control the entire request**
+— every byte, including headers the app's own UI never sets. That is the whole game.
+
+**Origins & the same-origin policy (SOP).** A browser isolates sites by **origin**
+(scheme + host + port). SOP stops `evil.com` from reading `bank.com`'s responses.
+**CORS** (§28) relaxes it deliberately; **CSRF** (§26) exploits that requests are *sent*
+cross-origin even when responses can't be *read*; **XSS** (§25) runs code *inside* the
+origin, defeating SOP entirely. Most client-side web security is SOP and its holes.
+
+**State: cookies, sessions, tokens.** HTTP is stateless, so identity rides in **cookies**
+(auto-sent by the browser — the root of CSRF) or **tokens** (JWT/bearer in a header —
+not auto-sent, so CSRF-resistant but theft-sensitive). Cookie flags matter:
+`HttpOnly` (JS can't read it — blunts XSS *theft*), `Secure` (HTTPS only), `SameSite`
+(`Lax`/`Strict`/`None` — the modern CSRF control, §26). **Sessions** map a token to
+server-side state. Break, steal, forge, fixate, or replay any of these → account
+takeover.
+
+**Servers, frameworks, data.** A web app = a front-end (HTML/JS/SPA) + a back-end
+(app server + framework: Django/Rails/Laravel/Express/Spring/etc.) + data stores (SQL/
+NoSQL/cache/object storage) + background workers. Each layer parses untrusted input —
+and each parser is an injection surface (SQL §17, NoSQL §36, command §18, template §35,
+XML §22, deserialization §21).
+
+**The proxy chain: CDN → WAF → load balancer → app.** Real traffic passes through
+multiple hops that each **parse the request differently**. That disagreement *is* the
+bug in **request smuggling** (§34), **cache poisoning** (§34), path-normalization authz
+bypass (§23), and many WAF bypasses (the front-end WAF and the back-end app see
+different things). **WAFs are signature/heuristic filters — a speed bump, not a wall**
+(§0.1); every injection class above lists how to slip past them.
+
+**APIs (where modern bugs live).** Most apps are now **REST/GraphQL APIs** behind an
+SPA or mobile client. APIs expose object references and functions directly →
+**BOLA/IDOR** and **BFLA** (broken object/function-level authorization) are the #1 API
+bug (§23). Mobile/legacy API versions are often weaker than the web app (§VI.3). See
+the API-specific notes in §43 (GraphQL) and the OWASP API Top 10.
+
+**Identity federation (OAuth/OIDC/SAML).** Instead of passwords, apps delegate login to
+an identity provider. These protocols have intricate, high-value failure modes
+(`redirect_uri`/`state`/PKCE/nonce, SAML signature wrapping, `email_verified`) — §19.
+Getting SSO wrong = org-wide account takeover.
+
+**DNS, subdomains, cloud.** The org's attack surface spans all its domains, subdomains,
+IP ranges, cloud buckets, and third-party SaaS. **Dangling DNS → subdomain takeover**
+(§42); **SSRF → cloud metadata → IAM creds** (§20) is the cloud-era crown jewel. Recon
+(§VI) is how you find the surface everyone else missed.
+
+**Why the terrain matters to you.** Almost every high payout comes from understanding a
+**boundary** others ignore: the WAF-vs-app parser gap, the cookie-vs-token trust, the
+proxy-vs-origin path disagreement, the API version the web UI doesn't use, the
+subdomain nobody decommissioned. Map the terrain, then hit the seam.
+
+---
+
+## IX.2 How web bug bounty actually works (the economics & process)
+
+**Platforms & program types:**
+- **Public bounty platforms:** HackerOne, Bugcrowd, Intigriti, YesWeHack, Synack
+  (vetted/private). They handle scope, triage, payment, and disclosure.
+- **Program flavors:** **paid bounty** (cash per valid bug), **VDP** (vulnerability
+  disclosure — *no money*, reputation/goodwill only; know before you spend time),
+  **private** (invite-only, less competition, often better signal), and **live hacking
+  events** (time-boxed, lucrative).
+- **Self-hosted** programs (Google, Microsoft, Apple, Meta, GitHub) often pay the most
+  and have their own rules/leaderboards.
+
+**Severity & payout.** Most use **CVSS**-based severity (Critical/High/Medium/Low) +
+the program's own table. Reality check on numbers (benchmarks, not promises — verify
+per program):
+- A typical mid-tier program's public range looks like **P1/Critical up to ~$10k,
+  P2/High ~$2.5k, P3/Medium ~$900, P4/Low ~$300** (Bugcrowd's own public program is a
+  real example of this shape).
+- **Top/elite programs pay dramatically more** — criticals can run into the **tens or
+  hundreds of thousands** (big tech, crypto, and live events), and the market is
+  heavily **top-heavy**: a small fraction of hunters earn the bulk of rewards. Dated
+  platform averages (e.g. HackerOne's older ~$3,384 average critical) understate what
+  the best programs now pay.
+- **Payout = severity × (data/users/assets at risk) × program generosity.** Same bug,
+  different program, 50× the money. **Pick targets by payout and surface, not just by
+  what's familiar.**
+
+**The process (and where you lose money):**
+1. **Read the policy first:** scope, **out-of-scope**, **ineligible findings**,
+   testing rules, whether it pays at all (VDP vs bounty), required PoC format,
+   disclosure terms, safe-harbor language.
+2. **Hunt → confirm with a minimal PoC → report.** First valid, unique report on a bug
+   generally wins; **duplicates pay nothing** (dedup is brutal on popular targets —
+   favor fresh scope, new features, private programs).
+3. **Triage:** the program validates severity and impact. **Impact decides the money** —
+   a vague "reflected value" loses; a demonstrated session-theft wins. Expect pushback;
+   be ready to **escalate/chain** to prove real impact.
+4. **Get paid (often after fix/verification), then coordinated disclosure.**
+
+**Commonly INELIGIBLE / closed-as-N/A (do not burn time unless you can show impact):**
+- **Self-XSS** (needs the victim to paste into their own console) — *unless* you can
+  turn it into a cross-user attack.
+- **Missing security headers** (HSTS, X-Frame-Options, CSP) **with no demonstrated
+  exploit**, **version/banner disclosure**, **verbose errors** without secrets.
+- **Open redirect with no further impact**, **clickjacking on pages with no sensitive
+  action**, **permissive CORS without a demonstrated data leak**.
+- **Logout CSRF**, **rate-limiting "issues"** without a concrete attack, **best-practice/
+  theoretical** findings, **automated-scanner output** with no validated impact.
+- **Out-of-scope assets**, **known/duplicate issues**, **physical/social engineering/DoS**
+  (usually forbidden).
+
+Those "N/A" items are the web version of the operator's "critical-for-company,
+zero-for-hunter" trap: a missing header may matter to a compliance auditor and pay
+**you** nothing. **Note it, prove impact or move on.**
+
+---
+
+## IX.3 The HUNTER'S PRIORITY LENS for web (what matters to *you*)
+
+> Same formula as Web3 (§VIII.3): **Hunter-Priority = payout × acceptance likelihood ×
+> frequency × provability.** Lead with provable, high-impact, in-scope bugs.
+
+**TIER S — the paydays (hunt first):**
+- **Remote Code Execution** (SQLi→RCE, command injection §18, SSTI §35, deserialization
+  §21, file upload→web shell §31, dependency confusion §46) — full server compromise.
+- **Full-read SQL/NoSQL injection** (§17/§36) — mass data/credential dump.
+- **Authentication bypass / account takeover of arbitrary users** (§19) — JWT
+  `alg:none`/confusion, OAuth/SAML flaws, password-reset poisoning (§40), pre-auth ATO.
+- **SSRF reaching cloud metadata / internal admin** (§20) → cloud account takeover.
+- **IDOR/broken access control exposing or modifying *other users'/all* data at scale**
+  (§23) — the single most reliable high-impact bounty class.
+
+**TIER A — strong, common, very payable:**
+- **Stored XSS** on another user's context (§25) → session/ATO; **CSRF on a sensitive
+  state change** (§26) → ATO; **privilege escalation** (§24); **vertical BFLA** on admin
+  functions; **business-logic** flaws that move money (§30); **race conditions** that
+  double-spend/overdraw (§27); **XXE** with file read/SSRF (§22); **subdomain takeover**
+  with session scope (§42); **GraphQL** authz/batch-brute (§43).
+
+**TIER B — accepted but smaller / situational:**
+- **Reflected XSS** (needs delivery), **self-XSS chained** to something, **CORS** with a
+  real but limited leak, **open redirect chained** into OAuth token theft, **CSWSH**
+  (§44), **info disclosure** that reveals a real secret, **rate-limit/OTP bypass**
+  enabling brute force (§45).
+
+**TIER C — usually low/N/A (note, don't grind):**
+- Missing headers, clickjacking on non-sensitive pages, version disclosure, logout/
+  low-impact CSRF, best-practice/theoretical, verbose errors without secrets, permissive
+  CORS without proof — see the ineligible list (§IX.2).
+
+**Web hunter heuristics:**
+- **Recon wins** (§VI): the endpoint/subdomain/param/API-version nobody else found is
+  where the undup'd bugs are. Mine JS and old API versions.
+- **Chain relentlessly** (§IX.7): open redirect → OAuth code → ATO; XSS → CSRF-token
+  theft → ATO; SSRF → metadata → cloud; IDOR → admin function → full control.
+- **Prove cross-user/real impact** — triage pays for impact, not theory. Turn "reflected"
+  into "steals this account's session."
+- **Favor fresh/low-competition scope** (new features, private programs, recent deploys)
+  to dodge duplicates.
+- **Target the boundaries** (§IX.1): WAF↔app, cookie↔token, proxy↔origin, web↔mobile API.
+- **Rules are sacred** (§0.2): test only in scope, minimal non-destructive PoC, no real
+  user data, disclose responsibly.
+
+---
+
+## IX.4 Impact tri-view — company / user / hunter (apply to every web bug)
+
+- **Company:** data breach (PII/credentials/payment) → **regulatory fines** (GDPR up to
+  4% global revenue, PCI-DSS, HIPAA, breach-notification costs), lawsuits, **reputational
+  damage**, downtime, incident response, lost customers/partners. RCE/breach can be
+  existential and, via supply chain (§46), spread to every customer.
+- **User:** account takeover, identity theft and long-tail fraud from leaked PII, stolen
+  funds, impersonation, privacy loss; for at-risk people (activists, journalists, abuse
+  survivors) leaked data can mean physical danger. Unlike Web3, some loss is reversible
+  (chargebacks, resets) — but **leaked data is permanent**.
+- **Hunter (you):** does it **pay**, is it **in scope**, **provable**, **unique** (not a
+  dup), and **not on the ineligible list**? Tier S/A → go; Tier C → note and move on.
+  Your time is the scarce asset — spend it on provable, payable, in-scope impact.
+
+---
