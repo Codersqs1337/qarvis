@@ -2034,3 +2034,216 @@ device takeover. For companies, the mobile backend API is often the softest entr
 the same data the web app guards tightly.
 
 ---
+
+# PART VIII — WEB3 DEEP DIVE (how it works, how the bounty works, hunter-first)
+
+> This part goes deep on Web3 because that is where the biggest, cleanest payouts live
+> and where the "assume a bypass" mind earns the most. It is written **hunter-first**:
+> the organizing question is always *"what does this mean for me, the bug bounty
+> hunter?"* — will it pay, will it be accepted, how often does it appear — and only
+> then what it means for the company and the users. A bug that is catastrophic for a
+> company but **not rewardable / not acceptable** for a hunter is deprioritized here
+> (see the priority lens in §VIII.3). Do the big, clean, provable, *payable* bugs
+> first.
+
+---
+
+## VIII.1 How Web3 infrastructure actually works (the terrain you attack)
+
+You cannot hunt what you don't understand. This is the mental model.
+
+**Blockchain & accounts.** A blockchain is a shared, append-only ledger replicated
+across many nodes, agreed by consensus (Proof-of-Stake on Ethereum today). Two account
+types: **EOAs** (externally owned accounts — a person with a private key) and
+**contract accounts** (code + storage, no key; they act only when called). State =
+every account's balance and storage.
+
+**The EVM & contracts.** The Ethereum Virtual Machine executes contract **bytecode**.
+Solidity/Vyper compile to it. A contract has **storage** (persistent, 32-byte slots —
+*expensive*), **memory** (per-call scratch), and functions. Calls between contracts
+are **message calls**; `delegatecall` runs *another* contract's code in *your* storage
+(the basis of upgradeable proxies — and of the delegatecall bugs in §7). Code and
+storage are **public and immutable** unless built upgradeable. *Everyone can read your
+code and state.* There are no secrets on-chain.
+
+**Transactions, gas, atomicity.** A transaction is a signed request from an EOA that
+changes state. It costs **gas** (paid in the native token) proportional to computation/
+storage. Crucially, a transaction is **atomic**: if any part reverts, the *entire*
+transaction is rolled back (only gas is spent). This is why **flash loans** work
+(borrow + use + repay in one tx, or it all reverts) and why **revert-on-loss** attacks
+on randomness/arbitrage are free retries (§12).
+
+**Mempool & ordering (MEV).** Submitted transactions sit in a **public mempool** before
+inclusion. **Block builders/proposers** choose which to include and in what order, and
+can insert their own. This ordering power is **MEV** (Maximal Extractable Value):
+front-run, back-run, sandwich (§11). Private relays (Flashbots) hide txs from the
+public mempool. *Your own exploit tx is visible in the mempool unless you use a private
+relay — generalized front-runners will steal it.*
+
+**Nodes & RPC.** You interact via **RPC endpoints** (Infura, Alchemy, public nodes).
+For hunting, you **fork mainnet** locally (Foundry's `anvil --fork-url`, Hardhat) to
+replay real state and test exploits for free against a copy of production.
+
+**Tokens & standards.** **ERC-20** (fungible), **ERC-721/1155** (NFTs), **ERC-4626**
+(tokenized vaults), **ERC-2612** (`permit` gasless approvals), **ERC-4337** (account
+abstraction). Many tokens deviate (fee-on-transfer, rebasing, no return value, >18 or
+<18 decimals, blocklists, hooks) — those deviations are a rich bug source (§10, §54).
+
+**DeFi primitives (where the money and bugs are):**
+- **AMM / DEX** (Uniswap, Curve, Balancer): liquidity pools price assets by a formula
+  (`x*y=k` etc.). **Spot price is manipulable** by trading into a pool — the root of
+  oracle attacks (§3). LP tokens represent pool shares; their valuation is a frequent
+  bug (read-only reentrancy, §1).
+- **Lending** (Aave, Compound): deposit collateral, borrow against it; **oracles**
+  value collateral; under-collateralized positions get **liquidated**. Mispriced
+  collateral → bad debt → insolvency (§3, §51).
+- **Stablecoins:** maintain a peg via collateral/algorithm; depeg = systemic cascade.
+- **Vaults/yield** (ERC-4626): deposit → shares; share-price math and **donation/first-
+  depositor** inflation (§14) bite here.
+- **Bridges:** lock on chain A, mint on chain B; the most-attacked, highest-value
+  surface (§5).
+- **Governance:** token-weighted voting over treasury/upgrades (§8).
+- **Oracles** (Chainlink): push off-chain prices on-chain; integration mistakes
+  (staleness, L2 sequencer, decimals) are common (§49).
+
+**L2s / rollups (Arbitrum, Optimism, Base, zkSync).** Execute off-chain, post data/
+proofs to Ethereum (L1). **Optimistic** rollups have a **fraud-proof challenge window**
+(~7 days) and a **sequencer** (can censor/reorder, and if down, oracle feeds go stale —
+§49). **ZK** rollups post validity proofs. L2-specific surface: sequencer trust, forced
+inclusion, withdrawal delays, cross-domain message replay, data availability (§52).
+
+**Composability ("money legos").** Protocols call each other freely. This is Web3's
+superpower *and* its systemic risk: one protocol's bug (a manipulable `get_virtual_price`,
+a Balancer pool rounding flaw) cascades into **every protocol that integrates it** —
+why "out-of-scope dependency" bugs still drain in-scope funds, and why **Primacy of
+Impact** (§VIII.2) matters to you.
+
+---
+
+## VIII.2 How Web3 bug bounty actually works (the economics & process)
+
+This is the business you're in. Know it cold.
+
+**Two distinct models — don't confuse them:**
+
+1. **Live bug bounties (e.g. Immunefi, HackenProof, Hats, protocols' own programs).**
+   You hunt **deployed, live** protocols. Pay-per-valid-bug. Rewards scale with
+   severity and **funds at risk**. This is where the life-changing numbers are: crypto
+   criticals routinely pay **five, six, even seven figures** because the alternative is
+   the protocol losing tens or hundreds of millions.
+   - **Severity & payout:** Immunefi uses its **Vulnerability Severity Classification
+     System (V2.3)**. **Critical** smart-contract payouts are commonly **~10% of the
+     funds directly at risk**, with a program-set **cap** and **floor** (floors like
+     **$50k**, caps up to **$1M+** on big programs — some elite programs cap far
+     higher). **High** is a program-set band (e.g. **$5k–$20k+**). Medium/Low are
+     smaller flat tiers.
+   - **Primacy of Impact (PoI):** many programs reward based on the **impact achieved**,
+     *even if the specific asset/contract you routed through is out of scope* — because
+     the protocol cares that funds *can* be drained, not which lego you used. If a
+     program honors PoI, **chase impact, not the scope list.**
+   - **Rules that cost you money if you ignore them:** if a contract is **upgradeable or
+     pausable**, usually **only the "initial attack" counts** (they can patch, so no
+     repeat rewards). **Known issues / prior-audit findings** are excluded. **PoC is
+     usually mandatory** for Critical/High (a runnable fork test proving the drain).
+     Many require **KYC** to pay, and **no mainnet exploitation** — prove it on a fork.
+
+2. **Audit contests (Code4rena, Sherlock, Cantina, CodeHawks).** A sponsor funds a
+   **fixed prize pool**; many "wardens" audit **pre-launch/updated** code for a set
+   window; judges rank findings and **split the pool** by severity and uniqueness. Goal:
+   keep bugs out of production *before* deploy. Trade-off vs bounties: the pool is
+   **guaranteed to be paid out** (so your odds of *some* reward are better), but it's
+   **shared and competitive**, and **duplicates dilute** your share. Great for building
+   reputation and consistent income; bounties are the lottery-with-better-odds for the
+   huge singles.
+
+**The hunter's economic reality (internalize this):**
+- **Severity × funds-at-risk = payout.** The same bug class pays wildly differently
+  depending on TVL behind it. A reentrancy on a $5M protocol and a $500M protocol are
+  the same skill, 100× the reward. **Hunt where the TVL is.**
+- **Duplicates kill contest income;** **speed and uniqueness** win. In live bounties,
+  **first valid report** wins — move fast once you have a provable PoC.
+- **Acceptance friction is real:** no PoC, out-of-scope with no PoI, known issue,
+  "theoretical with no realistic path," centralization/admin-key "risks" many programs
+  explicitly **exclude** — all are **time you don't get paid for.** Read the program's
+  **out-of-scope and known-issues list before you hunt.**
+- **Report quality = payout multiplier.** A clean root-cause + runnable PoC + impact +
+  fix often gets graded higher and paid faster than a vague "I think this is bad."
+
+---
+
+## VIII.3 The HUNTER'S PRIORITY LENS (what matters to *you*)
+
+> **Core rule for Qarvis:** when ranking what to look at, weight by what pays the
+> hunter, not by what merely worries the company. Prioritize:
+>
+> **Hunter-Priority = (Payout size) × (Acceptance likelihood) × (How often it actually
+> appears) × (How provable it is)**
+
+Apply this lens to every candidate bug:
+
+**TIER S — drop everything, these are the paydays (hunt these first):**
+- **Direct theft of funds / unauthorized withdrawal** (reentrancy incl. read-only,
+  access-control on withdraw/mint, oracle+flashloan draining a lender, bridge
+  signature/verification bypass, delegatecall takeover). *Huge payout, near-certain
+  acceptance with PoC, appears constantly, provable on a fork.* This is the job.
+- **Protocol insolvency / permanent fund freeze** (governance capture, proxy self-
+  destruct, math that mints infinite tokens or zeroes debt).
+- **Unbacked mint / infinite inflation** (overflow, broken invariant, signature replay
+  of a mint).
+
+**TIER A — strong, common, very payable:**
+- **Theft/loss under specific-but-realistic conditions** (price manipulation needing
+  some liquidity, liquidation logic abuse, vault share inflation on a fresh vault,
+  reward/airdrop double-claim, cross-chain/signature replay).
+- **Griefing that locks a *meaningful* amount of funds** (DoS on withdrawals,
+  stuck auctions).
+
+**TIER B — accepted but smaller / situational (do after S and A):**
+- **Rounding/precision leaks** that bleed value slowly, **slippage/deadline** gaps,
+  **front-runnable** actions with bounded profit, **gas griefing** without fund loss.
+
+**TIER C — usually LOW payout or OUTRIGHT EXCLUDED (don't burn time unless asked):**
+- **Centralization / admin-key / "the owner could rug" risks** — most programs
+  **exclude** these as "accepted trust assumptions." Catastrophic for *users*, usually
+  **$0 for the hunter.** Note it, don't chase it.
+- **Theoretical issues with no realistic exploit path**, **best-practice/gas-
+  optimization** nits, **missing events**, **compiler-version** style, **already-known/
+  audited** findings, and **informational** severity. Companies may "care," but these
+  **don't pay** — exactly the "critical for company, zero for hunter" case the operator
+  flagged: **deprioritize.**
+
+**Practical hunter heuristics:**
+- **Follow the money and the TVL.** Biggest pools, biggest payouts.
+- **Target new code and recent upgrades** — fresh deploys, post-audit changes, new
+  integrations. (GMX July 2025: a *patch* for an earlier bug introduced the reentrancy
+  that lost ~$42M. **Patches are prime hunting ground.**)
+- **Read the audits that already happened** — then hunt what they *didn't* cover
+  (out-of-scope dependencies under PoI, new code added after the audit, assumptions the
+  audit stated).
+- **Think in invariants and whole transactions**, fork-test everything, and ship the
+  **first clean provable PoC** before someone else does.
+- **Respect the rules** (§0.2, §VIII.2): fork PoCs only, never touch mainnet funds,
+  disclose through the program. Breaking this forfeits the reward *and* your reputation
+  — your most valuable asset in this field.
+
+---
+
+## VIII.4 Impact tri-view — company / user / hunter (apply to every Web3 bug)
+
+For each bug, reason on three axes. The **hunter axis is the tiebreaker** for where to
+spend time.
+
+- **Company (protocol/DAO):** insolvency, drained treasury, dead token, shutdown,
+  legal/regulatory heat, permanent reputation loss. Web3 adds a brutal twist: there's
+  often **no insurance, no clawback, and the "company" may be a handful of pseudonymous
+  devs** — a single critical can end the project in one block.
+- **User:** **irreversible** loss of real money — no bank, no chargeback, no reset. A
+  drained wallet or exploited deposit is simply *gone*. Also: depegged stablecoins
+  wiping savings, worthless governance tokens, and (via bridges) losses cascading to
+  users who never touched the buggy protocol. For users, Web3 impact is the most
+  permanent in all of security.
+- **Hunter (you):** does it **pay**, will it be **accepted**, is it **provable**, is it
+  a **duplicate/known** issue? Tier S/A = go; Tier C = note and move on. Your time is
+  the scarce asset; spend it on provable, payable impact.
+
+---
