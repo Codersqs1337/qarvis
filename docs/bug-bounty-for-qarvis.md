@@ -3068,3 +3068,138 @@ Web coverage is now comprehensive and hunter-first:
 > (e.g. cloud/K8s, API Top 10 expansion, a tooling cookbook, or report-writing templates).
 
 ---
+
+# PART X — CLOUD, CONTAINER, KUBERNETES & CI/CD SECURITY
+
+Modern web targets run on cloud + containers + orchestration + CI/CD pipelines. This is
+where a "web" bug (SSRF, SSRF→metadata, leaked token) escalates into **full
+infrastructure takeover** — the biggest payouts and the worst breaches. Hunter-first,
+same format.
+
+## X.1 How cloud infrastructure works (the terrain)
+
+**IAM is the perimeter.** In cloud, identity — not the network — is the real boundary.
+Every resource (compute, storage, database, function) acts as, or assumes, a **role**
+with **policies** granting permissions. Steal or abuse a role's credentials and you
+inherit its permissions. The crown-jewel attack: get **temporary credentials** (an STS
+token) for a role and enumerate what it can do.
+
+**The instance metadata service (IMDS).** Every cloud VM exposes a link-local metadata
+endpoint (`169.254.169.254`, GCP `metadata.google.internal`, Azure
+`169.254.169.254/metadata`) returning instance config **and the attached role's
+credentials**. **SSRF (§20) that reaches IMDS = instant credential theft** → cloud
+account pivot (the Capital One pattern). **IMDSv2** (token-required, hop-limited) blunts
+basic SSRF; v1 is wide open.
+
+**Object storage (S3/GCS/Azure Blob).** Buckets misconfigured as public, or with
+over-broad ACLs/policies, leak or accept data. Writable buckets serving a site = stored
+XSS / supply-chain injection. Predictable bucket names + no auth = mass data exposure.
+
+**Serverless & managed services.** Lambda/Cloud Functions inherit a role (often
+over-privileged); env vars hold secrets; event sources (API Gateway, queues) are entry
+points. Managed DBs/secrets managers are reachable if you hold the right role.
+
+## X.2 Containers & Kubernetes
+
+**Containers** share the host kernel; isolation is namespaces + cgroups + capabilities.
+Misconfig → **container escape** to the host: privileged containers, mounted Docker
+socket (`/var/run/docker.sock`), host path mounts, excess capabilities
+(`CAP_SYS_ADMIN`), `hostPID`/`hostNetwork`, writable host filesystem.
+
+**Kubernetes attack surface:**
+- **Exposed/anonymous API server, kubelet (10250), etcd, or dashboard** → cluster
+  control or secret theft.
+- **Service account tokens** auto-mounted into pods (`/var/run/secrets/kubernetes.io/`)
+  → with RBAC too broad, call the API to read secrets, create pods, escalate.
+- **Over-broad RBAC** (`cluster-admin`, wildcard verbs, `create pods`/`exec`) → lateral
+  movement and privilege escalation (`pods/exec`, mount a privileged pod, read all
+  secrets).
+- **Secrets** stored base64 (not encrypted) in etcd; readable with the right role.
+- **SSRF from a pod → cloud IMDS → node role → whole cluster.**
+- **Network policy absence** → free east-west movement between pods.
+
+**How found/bypassed.** From any foothold (SSRF, RCE in a pod, a leaked kubeconfig/
+token): read the mounted service-account token, hit the API server
+(`kubectl auth can-i --list`), enumerate RBAC, reach for secrets/exec/pod-create, and
+pivot to IMDS. Tools: `kube-hunter`, `kubectl`, `peirates`, `amicontained`, `trivy`
+(image CVEs), `kubeaudit`.
+
+**Defenses.** IMDSv2 + hop limit; least-privilege IAM and RBAC (no wildcards, no
+default `cluster-admin`); don't auto-mount SA tokens unless needed; encrypt etcd
+secrets; network policies; non-privileged containers, drop capabilities, read-only
+rootfs, no docker socket; private API server; image scanning; admission control (OPA/
+Kyverno). *Bypass angle:* hunt the one over-privileged role/pod/token — there's almost
+always one.
+
+## X.3 CI/CD & pipeline attacks
+
+CI/CD runners hold the keys to prod. Attack surface: **poisoned pipeline execution**
+(PPE — inject build steps via a PR/config that CI runs with its secrets), **secret
+exfiltration** from build logs/env, **self-hosted runner compromise** (persistent,
+reused across jobs), **branch-protection/approval bypass**, **artifact/dependency
+tampering** (§46), **`pull_request_target`** misuse running untrusted code with write
+tokens, and **OIDC trust misconfig** letting external repos assume cloud roles.
+
+**How found/bypassed.** Review workflow files (`.github/workflows/`, `.gitlab-ci.yml`):
+do they run untrusted PR code with secrets? use `pull_request_target` + checkout of PR
+head? echo secrets? trust over-broad OIDC `sub` claims? Can a fork PR trigger a
+privileged job? *This repo's own `build.yml` fetches an external model over the network
+and runs third-party actions — a reminder that pipelines pull untrusted inputs.*
+
+**Defenses.** Never run untrusted PR code with secrets; least-privilege `GITHUB_TOKEN`;
+pin actions by SHA; isolated ephemeral runners; scoped OIDC trust (exact repo + branch);
+secret scanning; required reviews that can't be self-approved.
+
+**Why cloud/K8s/CI-CD matters.** *Company:* one stolen role or runner = total
+infrastructure compromise, every customer's data, and supply-chain spread to downstream
+users. *User:* mass breach of everything the company holds. *Hunter:* **Tier S** — SSRF→
+metadata→IAM, public writable bucket, exposed K8s API, or a PPE in CI are among the
+highest-paying, clearest-impact findings in all of bounty. *National/critical-infra:*
+cloud and CI/CD compromise is the modern supply-chain attack that hits governments and
+critical services at scale.
+
+---
+
+# PART XI — OWASP API SECURITY TOP 10 (2023)
+
+Modern targets are API-first, so APIs get their own OWASP list. Master it — these map to
+the most dependable, least-duplicated high-impact bounties (§23, §43). Hunter-first.
+
+- **API1 — Broken Object Level Authorization (BOLA/IDOR).** The #1 API bug: swap an
+  object id and reach another user's data (§23). *Hunter:* **Tier S/A**, highest-yield,
+  automatable at scale.
+- **API2 — Broken Authentication.** Weak token issuance/validation, JWT flaws, no
+  rate-limit on auth, credential stuffing (§19, §45). *Hunter:* **Tier S** on arbitrary
+  ATO.
+- **API3 — Broken Object Property Level Authorization.** Merges "excessive data
+  exposure" (API returns more fields than the client should see — read the raw JSON, not
+  the UI) and "mass assignment" (§23 — set fields like `role`/`isAdmin` the server binds
+  blindly). *Hunter:* **Tier A**, common and provable.
+- **API4 — Unrestricted Resource Consumption.** No rate/size/cost limits → brute force,
+  DoS, cost-inflation, OTP/aliasing brute (§45, §43). *Hunter:* pays when it enables
+  brute-force ATO; raw "no rate limit" often Tier C.
+- **API5 — Broken Function Level Authorization (BFLA).** Call admin/privileged
+  functions as a low-priv user — different method/endpoint, no vertical check (§24).
+  *Hunter:* **Tier S/A** (privilege escalation).
+- **API6 — Unrestricted Access to Sensitive Business Flows.** Automating a business flow
+  the design assumed was manual (bulk-buy scalping, mass signup, reservation abuse) —
+  business logic at API scale (§30). *Hunter:* **Tier A** when it causes real harm/loss.
+- **API7 — Server-Side Request Forgery (§20).** APIs that fetch user-supplied URLs →
+  metadata/internal. *Hunter:* **Tier S** reaching cloud/internal.
+- **API8 — Security Misconfiguration.** Verbose errors, permissive CORS, missing
+  hardening, unpatched (§28, §33). *Hunter:* depends on demonstrated impact.
+- **API9 — Improper Inventory Management.** Shadow/old/undocumented API versions and
+  hosts (`/v1` lacks `/v2`'s fixes), debug/staging endpoints (§VI.3). *Hunter:* **Tier
+  A** — the forgotten endpoint is where the undup'd bugs live; recon gold.
+- **API10 — Unsafe Consumption of APIs.** The target blindly trusts data from a
+  third-party API it calls (injection/SSRF via the upstream response). *Hunter:*
+  situational, but a real chain vector.
+
+**API hunting heuristics.** Grab the OpenAPI/Swagger spec (or rebuild it); enumerate
+every object id for **BOLA** across two accounts; read raw responses for **excessive
+data**; add unexpected fields for **mass assignment**; hit admin functions directly for
+**BFLA**; find **old/shadow versions** (API9) and re-test fixed bugs there; chase
+**SSRF** on any URL-accepting field. GraphQL: §43 (introspection, aliasing/batch brute,
+per-resolver authz).
+
+---
