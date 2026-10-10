@@ -3203,3 +3203,165 @@ data**; add unexpected fields for **mass assignment**; hit admin functions direc
 per-resolver authz).
 
 ---
+
+# PART XII — TOOLING COOKBOOK
+
+Tools don't find bugs — reasoning does (§0). But the right tool turns a hypothesis into
+a confirmed, provable finding fast. This is the hunter's working kit, grouped by phase.
+Use only in authorized scope (§0.2); respect program rules on automated scanning.
+
+## XII.1 Recon & discovery
+- **Subdomains/assets:** `amass`, `subfinder`, `assetfinder`, `crt.sh`, `github-subdomains`,
+  `dnsx`/`puredns`/`shuffledns` (resolve), `massdns`; permutations `dnsgen`/`gotator`.
+- **Live hosts & fingerprint:** `httpx` (titles/status/tech/TLS), `whatweb`, `wappalyzer`,
+  `nuclei -t technologies`.
+- **Content/params:** `ffuf`, `feroxbuster`, `dirsearch` (+ SecLists wordlists); `arjun`,
+  Burp **param-miner** (hidden params, headers); `gau`/`waybackurls`/`katana` (historical
+  URLs); `gf` patterns to triage URLs by bug type.
+- **JS mining:** `getJS`, `linkfinder`, `jsluice`, source-map extraction (`sourcemapper`),
+  `trufflehog`/`gitleaks` for secrets in repos/JS.
+- **Known-CVE sweep:** `nuclei` (community templates), `nmap` + NSE.
+- **OSINT/dorking:** Google/GitHub dorks, Shodan/Censys/FOFA, `dehashed` (breach data,
+  within rules).
+
+## XII.2 Core proxy & manual testing
+- **Burp Suite** (the backbone): Proxy, Repeater, Intruder, **Turbo Intruder** (races/
+  brute at speed), **param-miner**, **DOM Invader** (DOM XSS + prototype pollution),
+  **Collaborator** (OAST for blind SSRF/XXE/SQLi/RCE), **Logger++**, **Autorize**
+  (authz/IDOR testing across roles), **JWT Editor**.
+- **OWASP ZAP** (open-source alternative), **mitmproxy** (scriptable, mobile/API),
+  **Caido** (modern Burp-like).
+
+## XII.3 Per-class specialists (web)
+- **SQLi:** `sqlmap` (tamper scripts for WAF bypass), `ghauri`.
+- **XSS:** `dalfox`, `XSStrike`, DOM Invader; `kxss`/`gxss` for reflected-param triage.
+- **SSRF/OOB:** Burp Collaborator, `interactsh`; `gopherus` (gopher payloads for Redis/
+  MySQL/SMTP).
+- **XXE/OOB:** custom DTD + `interactsh`.
+- **Open redirect / params:** `oralyzer`, `gf redirect`.
+- **Auth/JWT:** `jwt_tool`, Burp JWT Editor, `hashcat` (crack weak HMAC secrets).
+- **Fuzzing/content:** `ffuf` (also for vhost, parameter, and value fuzzing).
+- **CORS:** `corsy`; **subdomain takeover:** `subjack`, `nuclei` takeover templates,
+  `dnsReaper`.
+- **GraphQL:** `graphw00f` (fingerprint), `clairvoyance` (schema w/o introspection),
+  InQL, `graphql-cop`.
+- **Request smuggling:** Burp **HTTP Request Smuggler** (Albinowax), `smuggler.py`.
+- **Dirs/secrets in CI:** `trufflehog`, `gitleaks`, `semgrep` (SAST).
+
+## XII.4 Mobile / Android (relevant to Qarvis)
+- **Static:** `jadx`, `apktool`, `MobSF` (automated), `semgrep` mobile rules; read
+  `AndroidManifest.xml` for exported components/flags.
+- **Dynamic:** `Frida` + `objection` (hook, bypass root/pinning, dump), `adb` (invoke
+  components, deep links, ContentProvider queries), Burp/mitmproxy + pinning bypass.
+- **Network:** `apk-mitm` (patch pinning for testing), `nuclei`/`httpx` on the backend
+  API the app reveals.
+
+## XII.5 Web3 / smart contracts
+- **Dev/test/exploit:** **Foundry** (`forge`/`cast`/`anvil` — fork mainnet, write PoC
+  exploits, fuzz/invariant tests), Hardhat, Tenderly (debugger/simulator), Remix.
+- **Static analysis:** **Slither** (fast, many detectors), **Aderyn**, Mythril/MythX,
+  Semgrep smart-contract rules.
+- **Fuzzing/invariants:** **Echidna**, **Medusa**, Foundry invariant tests; symbolic:
+  **Halmos**, Manticore.
+- **On-chain recon:** block explorers (Etherscan + verified source), **cast**/ethers,
+  Tenderly, Phalcon (tx tracing), Dedaub/Panoramix (decompile unverified bytecode),
+  `heimdall`.
+- **Monitoring/data:** rekt.news, DeFiLlama (TVL — follow the money, §VIII.3), Immunefi
+  scopes.
+
+## XII.6 Discipline
+- Automate **discovery**, hand-verify **impact**. Scanners produce leads and false
+  positives; **you** confirm exploitability and write the PoC.
+- Keep raw requests/responses and a repro log for every candidate (feeds the report).
+- Rate-limit yourself; honor program scanning rules; never run destructive tooling on
+  production.
+
+---
+
+# PART XIII — REPORT WRITING & POC DISCIPLINE
+
+A finding you can't communicate is a finding you don't get paid for. Triage pays for
+**clear, reproducible, impactful** reports. This is how to write them.
+
+## XIII.1 Anatomy of a great report
+1. **Title:** `[Severity] <Bug class> in <component> leading to <impact>`
+   — e.g. "[Critical] IDOR in /api/v2/invoices/{id} allows reading any user's invoices."
+2. **Summary:** 2–3 sentences: what, where, and the real-world impact.
+3. **Severity + CVSS:** your rating with the vector string and a one-line justification
+   (tie it to the impact, not the mechanism).
+4. **Steps to reproduce:** numbered, exact, copy-pasteable. Include the full request(s),
+   the account(s)/role(s) used, and every value. Assume the triager starts from zero.
+5. **Proof of concept:** the minimal artifact that proves it — a request, a short
+   script, a screenshot/video, or (Web3) a runnable Foundry fork test. **Benign marker
+   only** — never real victim data or destructive payloads.
+6. **Impact:** spell out the business/real-world consequence across company/user (and
+   the chain's end state). This is what moves severity and payout (§III, §VIII.4, §IX.4).
+7. **Remediation:** the concrete fix (parameterize, enforce authz server-side, bind the
+   signature, etc.). Shows depth and speeds the fix/payout.
+8. **References:** OWASP/CWE/SWC IDs, related disclosures.
+
+## XIII.2 PoC that proves impact (not just the quirk)
+- Demonstrate the **end of the chain**: not "this value reflects" but "this payload runs
+  JS in another user's session and exfiltrates their CSRF token"; not "I can read id 124"
+  but "as user A I retrieved user B's PII — here it is (redacted)."
+- **Two-account proof for IDOR/authz:** show A cannot, B's object is A's to read.
+- **Web3:** a Foundry test that forks mainnet, runs the exploit, and `assert`s the
+  attacker balance increased / protocol drained — self-contained and re-runnable.
+- **Minimal & non-destructive:** smallest steps, a single benign test record, no mass
+  extraction, no service impact. Clean up test data where possible.
+
+## XIII.3 Severity & impact framing (get paid fairly)
+- Rate by the **worst realistic outcome × likelihood × blast radius × reversibility**
+  (§III.2), and **report at the end of the chain** you can demonstrate.
+- Pre-empt the triager's downgrade: if it's pre-auth, say so; if it affects all users,
+  show it; if it chains, show the chain. Don't inflate — overclaiming burns credibility,
+  your real currency.
+
+## XIII.4 Etiquette & the long game
+- **One clear report per issue;** don't bundle unrelated bugs or split one bug into many.
+- Be **professional and patient** with triage; provide more repro on request; never
+  threaten disclosure or leak (it forfeits reward and reputation, and can be illegal).
+- **Respect disclosure terms** — coordinate timing; get permission before publishing a
+  writeup.
+- **Reputation compounds:** clean reports → private invites → higher-paying programs →
+  the top of the market. Your name is the asset (§VIII.3, §IX.3).
+
+## XIII.5 Reusable report skeleton
+```
+Title: [Severity] <class> in <endpoint/contract> → <impact>
+
+## Summary
+<what/where/impact in 2-3 sentences>
+
+## Severity
+<Critical/High/...>  CVSS:3.1/AV:N/AC:L/... (<score>)
+<one-line justification tied to impact>
+
+## Steps to Reproduce
+1. As <role/account>, send:
+   <full request / command>
+2. Observe <response / state change>
+3. <...>
+
+## Proof of Concept
+<request(s) / script / Foundry test / screenshot — benign marker only>
+
+## Impact
+<company + user consequence; chain end-state; who/what is affected and how many>
+
+## Remediation
+<concrete fix>
+
+## References
+OWASP <Axx> / CWE-<n> / SWC-<n> / <related disclosure>
+```
+
+---
+
+> **Knowledge base status.** Qarvis now carries: Web3 (I, VIII), Web/OWASP (II, V, IX),
+> cloud/container/K8s/CI-CD (X), OWASP API Top 10 (XI), recon/methodology (VI), mobile/
+> Android incl. Qarvis self-audit (VII), the Why-This-Matters framework (III), checklists
+> (IV), a tooling cookbook (XII), and report/PoC discipline (XIII) — all hunter-first,
+> every class with detection, defenses, **bypasses**, real cases, impact, and payout
+> tiers. It is a complete, self-contained offensive-reasoning brain for authorized work.
+> Last substantive research/expansion pass: 2026-10-10.

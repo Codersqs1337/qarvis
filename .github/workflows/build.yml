@@ -16,8 +16,10 @@ jobs:
           distribution: temurin
           java-version: '17'
 
-      - name: Set up Android SDK
-        uses: android-actions/setup-android@v3
+      # Android SDK (platform 34, build-tools, platform-tools) is preinstalled on
+      # ubuntu-latest with ANDROID_HOME/ANDROID_SDK_ROOT set and licenses accepted.
+      # We rely on it directly: the old android-actions/setup-android@v3 step failed
+      # trying to install the long-removed legacy "tools" package.
 
       - name: Fetch Vosk offline model
         run: |
