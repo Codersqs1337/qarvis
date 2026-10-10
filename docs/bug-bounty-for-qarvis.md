@@ -1841,3 +1841,196 @@ mass, cross-organization breach (SolarWinds, `event-stream`, countless npm/PyPI
 incidents). For companies and governments it's a systemic, trust-destroying risk.
 
 ---
+
+# PART VI — RECON & METHODOLOGY
+
+Most bounties are won *before* a single payload: in attack-surface discovery. The
+hunter who sees the endpoint nobody else found wins. This part is the process Qarvis
+runs to build the map it then attacks (always within authorized scope — §0.2).
+
+### VI.1 Scope intake (do this first, every engagement)
+
+- Read the program/engagement rules end to end: in-scope domains/apps/contracts,
+  **out-of-scope** assets, **prohibited test types** (DoS, automated scanning limits,
+  social engineering, physical), rate limits, required test markers/headers, and the
+  disclosure process.
+- Note the **reward model** (what severities pay, what's explicitly out of interest) to
+  triage effort toward impact that counts.
+- Set up a test account (or two, for IDOR) and a safe PoC marker so findings are
+  obviously benign.
+
+### VI.2 Asset & subdomain discovery
+
+- **Passive:** certificate transparency (crt.sh), `amass`/`subfinder`/`assetfinder`,
+  DNS datasets, ASN lookups (find all IP ranges the org owns), reverse DNS, Shodan/
+  Censys/FOFA, GitHub/GitLab org repos, Wayback/`gau`/`waybackurls` for historical
+  URLs and parameters, `dorking` (Google/GitHub dorks for leaked keys, panels, files).
+- **Active (within rules):** DNS brute force (`puredns`, `shuffledns` with good
+  wordlists + resolvers), permutation (`dnsgen`, `altdns`), `massdns`; resolve and
+  probe live hosts (`httpx`) capturing titles, tech, status, TLS.
+- **Fingerprint:** `httpx`/`wappalyzer`/`whatweb`/`nuclei -t technologies` for stack,
+  CDN/WAF, frameworks, versions → known-CVE leads.
+
+### VI.3 Content & parameter discovery
+
+- **Directory/file brute force:** `ffuf`/`feroxbuster`/`dirsearch` with
+  context-appropriate wordlists (SecLists); recurse; look for backups
+  (`.bak`,`~`,`.old`), VCS (`.git/`,`.svn/`), config (`.env`), admin panels, API docs
+  (`/swagger`, `/openapi.json`, `/graphql`, `/.well-known/`), debug/actuator endpoints.
+- **JavaScript mining:** download all JS, beautify, grep for endpoints, API routes,
+  parameters, secrets/keys, feature flags, and hidden functionality
+  (`linkfinder`, `getjs`, `jsluice`, source maps → original source). JS is where hidden
+  attack surface lives.
+- **Parameter discovery:** `arjun`/`param-miner` to find unlinked parameters (often
+  the ones with no validation); mine Wayback for historical params.
+- **Mobile/desktop clients & APIs:** decompile apps (Part VII) and intercept to find
+  undocumented API endpoints — frequently weaker than the web app.
+
+### VI.4 Mapping & modeling (turn recon into hypotheses)
+
+- Build the **role/permission matrix** and the **state machine** (signup → verify →
+  use → delete; order → pay → ship → refund). Bugs hide in transitions and in "who may
+  do what."
+- Mark every **trust boundary** and every **object reference** (IDOR candidates).
+- Diff behavior between roles, tenants, and API versions (old `/v1` often lacks `/v2`'s
+  fixes).
+- List inputs by *sink type* (query, shell, template, HTML, URL-fetch, deserializer,
+  file op) to know which class to test where.
+
+### VI.5 Testing discipline
+
+- One hypothesis, smallest confirming probe, minimal footprint. Prefer blind/OAST
+  confirmation over anything destructive.
+- Keep a log of every request/finding for the report. Screenshot/save raw requests.
+- **Chain constantly:** after any finding, ask "what does this unlock?" (recon leak →
+  endpoint → IDOR → ATO; open redirect → OAuth code theft → ATO; SSRF → metadata →
+  cloud).
+- Respect rate limits and avoid noisy automated scanning where the program forbids it.
+
+### VI.6 Where bugs cluster (pattern memory)
+
+- **New features / recent deploys** (less tested), **beta/staging** hosts, **old API
+  versions**, **admin/internal** tools exposed externally, **third-party integrations**
+  and webhooks, **import/export/file** features, **payment/refund/coupon** logic,
+  **auth edges** (reset, SSO, 2FA, invite), **multi-tenant** boundaries, and anything
+  that **fetches a URL, renders a template, parses a document, or deserializes**.
+
+---
+
+# PART VII — MOBILE & ANDROID APPLICATION SECURITY
+
+Directly relevant to Qarvis itself (an Android app) and to mobile bug bounty targets.
+Framework: **OWASP MASVS** (verification standard) and **OWASP MASTG** (testing guide).
+Mobile bugs span the app binary, local storage, IPC, and the backend it talks to.
+
+### VII.1 Attack surface
+
+- **Client binary:** hardcoded secrets/keys, weak crypto, logic you can patch/bypass.
+- **Local storage:** insecure data at rest (SharedPreferences, SQLite, files,
+  KeyStore misuse, cached data, logs).
+- **IPC / components:** exported Activities, Services, BroadcastReceivers, and
+  **ContentProviders**; **deep links / app links**; intent handling.
+- **Network:** API calls (often the real prize — weaker than web), TLS/pinning.
+- **Platform misuse:** permissions, WebViews, clipboard, screenshots, backup flags.
+
+### VII.2 How it's tested
+
+- **Static:** decompile with `jadx`/`apktool` (and `apktool` for resources/manifest);
+  read `AndroidManifest.xml` for `exported=true` components, permissions,
+  `android:debuggable`, `allowBackup`, `usesCleartextTraffic`,
+  `networkSecurityConfig`, deep-link intent filters. Grep smali/Java for secrets,
+  endpoints, crypto. Tools: `MobSF` (automated static+dynamic), `semgrep` mobile rules.
+- **Dynamic:** run on a rooted device/emulator; **Frida**/`objection` to hook methods
+  (bypass root/pinning checks, dump runtime data, call internal functions); intercept
+  API traffic (Burp/mitmproxy with a user CA, plus pinning bypass); inspect storage at
+  runtime.
+- **IPC testing:** `adb` to invoke exported components
+  (`adb shell am start`/`startservice`/`broadcast`), fuzz ContentProviders
+  (`content query --uri`), and trigger deep links (`adb shell am start -a VIEW -d
+  "app://..."`).
+
+### VII.3 Key Android bug classes, defenses & bypasses
+
+**Insecure data storage.** Sensitive data (tokens, PII, keys) in plaintext
+SharedPreferences/SQLite/files, in logs (`Logcat`), or in app backups. *Defense:*
+Android KeyStore for keys, `EncryptedSharedPreferences`, no secrets in logs,
+`allowBackup=false`, `FLAG_SECURE` for sensitive screens. *Bypass:* with root/Frida,
+read KeyStore-protected data at runtime; pull `adb backup` if allowed; scrape logs.
+
+**Exported components & intent abuse.** An `exported` Activity/Service/Receiver callable
+by *any* app → unauthorized actions, privilege use, or data leak. **Intent redirection/
+confused deputy:** a component forwards an attacker-supplied Intent with the victim
+app's privileges, reaching non-exported components or `grantUriPermission` to private
+files. *Defense:* `exported=false` unless needed; `signature`-level permissions;
+validate incoming Intents; don't blindly forward Intents; verify caller identity.
+*Bypass:* craft Intents via `adb`/a malicious app; chain intent redirection to reach
+internal components; pending-intent hijacking.
+
+**ContentProvider leaks / SQLi / path traversal.** Exported providers exposing private
+data, injectable query selectors (SQLi), or `openFile` path traversal
+(`../../databases/...`) leaking app-private files. *Defense:* not exported, permissions,
+parameterized queries, canonicalized file paths. *Bypass:* `content://` queries with
+injection or traversal from any app.
+
+**Deep link / App Link hijacking & open redirect.** Weakly verified deep links let a
+malicious app register the same scheme, or unvalidated deep-link parameters drive
+in-app navigation/WebView to attacker URLs (→ token theft, OAuth code interception).
+*Defense:* verified **App Links** (Digital Asset Links), validate all deep-link params,
+don't pass them to WebView/`loadUrl` unchecked. *Bypass:* scheme collision, `autoVerify`
+gaps, parameter injection into the post-link flow.
+
+**WebView vulnerabilities.** `setJavaScriptEnabled(true)` + `addJavascriptInterface`
+exposes native methods to page JS (→ RCE-in-app if the page is attacker-influenced);
+`setAllowFileAccess`/`setAllowUniversalAccessFromFileURLs` enabling `file://` → local
+file theft and cross-origin reads; loading untrusted/`http` content → XSS with native
+bridge reach. *Defense:* disable JS where unneeded, avoid `addJavascriptInterface`
+(or `@JavascriptInterface`-gate and only trusted content), disable file access, load
+only HTTPS trusted origins, set a strict `WebViewClient`. *Bypass:* MITM of cleartext/
+unpinned WebView content; deep-link into the WebView with a malicious URL; exploit an
+exposed JS bridge.
+
+**Weak/missing TLS & cert pinning.** Cleartext traffic, trusting user CAs, or no
+pinning → MITM of API traffic. *Defense:* `networkSecurityConfig` (no cleartext, no
+user CAs for sensitive), certificate/public-key pinning. *Bypass (for testing):* Frida/
+objection pinning bypass, patching the pinning check, `apk-mitm` — which is exactly why
+pinning is only *one* layer, not a substitute for server-side authz.
+
+**Root/debug detection bypass.** Apps detect root/Frida/emulator; these are
+*speed bumps* — routinely bypassed with Frida hooks, Magisk Hide/DenyList, or patching
+the check. Never treat client-side integrity checks as a security boundary.
+
+**Client-side trust / hardcoded secrets.** API keys, signing secrets, backend URLs,
+and "admin" flags baked into the binary. *Defense:* keep secrets server-side; the app
+should enforce nothing security-critical locally. *Bypass:* decompile and read; patch
+local checks (feature unlocks, paywalls, "isPremium"); the real bugs are usually in the
+**backend API** these reveal.
+
+### VII.4 Qarvis self-audit notes (defensive, for this very project)
+
+Because Qarvis is an always-listening accessibility/overlay assistant that launches
+apps and can place calls, it is itself a sensitive component. When reasoning about its
+own hardening:
+
+- **Exported components:** ensure `QarvisService`, `BootReceiver`, and any Activity are
+  not needlessly `exported`; a malicious app should not be able to drive Qarvis's
+  command router via Intent.
+- **Command injection into intents:** the `CommandRouter` builds `tel:`/URL/package
+  intents from recognized speech — validate/allowlist so a crafted phrase can't dial
+  arbitrary premium numbers or launch unintended privileged flows (the existing
+  financial-app blocklist is a good instinct; prefer an **allowlist** model for
+  anything money- or call-related).
+- **Overlay (HUD) & accessibility:** overlay + accessibility permissions are prime
+  **tapjacking/overlay-attack** surface and malware-flagging triggers; keep
+  `FLAG_SECURE` on sensitive content and minimize what the overlay can trigger.
+- **No secrets in the APK / logs;** `allowBackup=false`; avoid logging recognized
+  commands (privacy).
+- **Wake-word/model assets integrity** and the **GitHub Actions build pipeline**
+  (supply chain, §46): protect signing keys and build secrets; pin actions.
+
+**Why mobile matters.** Phones hold identity, money, location, messages, and
+ever-listening sensors. A mobile bug is intimate: it can read a person's whole life,
+and for an assistant with call/overlay/accessibility power, a compromise is effectively
+device takeover. For companies, the mobile backend API is often the softest entry to
+the same data the web app guards tightly.
+
+---
