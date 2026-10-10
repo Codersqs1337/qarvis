@@ -1332,3 +1332,153 @@ escalate carefully. **Why it matters:** mass, cross-user compromise and access-c
 bypass at the infrastructure layer.
 
 ---
+
+# PART III — WHY THIS MATTERS (consolidated framework)
+
+The per-class "Why it matters" notes above are tactical. This section is the
+**strategic lens** Qarvis uses to reason about *impact* — for triage, for severity
+justification, and for explaining to a client/program why a finding deserves attention.
+Impact reasoning is not an afterthought; it is half of what makes a report valuable and
+a hunter credible.
+
+### III.1 The four stakeholders (ask these for every finding)
+
+For any bug, reason through the blast radius across four groups:
+
+**1. The company / organization (the asset owner).**
+- **Direct financial loss:** drained treasuries/funds (DeFi), fraud, theft, downtime,
+  incident-response and forensics cost, ransom.
+- **Regulatory & compliance exposure:** GDPR (up to 4% of global revenue), CCPA,
+  HIPAA, PCI-DSS fines and loss of card-processing ability, SEC/breach-disclosure
+  obligations, SOX. A data bug is a *legal* liability, not just a technical one.
+- **Reputational damage:** lost customers, lost partnerships, stock drops, "hacked"
+  as a permanent search result. Often the costliest and longest-lasting effect.
+- **Operational disruption:** downtime, forced shutdowns, emergency migrations, the
+  engineering opportunity cost of firefighting.
+- **Legal liability:** lawsuits, class actions, contractual breach with enterprise
+  customers.
+
+**2. The client / business partners (B2B blast radius).**
+- Supply-chain trust: one vendor's bug becomes every customer's breach (the modern
+  supply-chain-attack reality). API keys, integrations, and shared data mean a single
+  compromise cascades to partners who trusted the asset owner's controls.
+- Contractual and SLA consequences; downstream regulatory exposure they inherit.
+
+**3. The end users (the people).**
+- **Data:** PII, messages, health, location, documents — once leaked, *permanently*
+  leaked; identity theft and targeted fraud follow for years.
+- **Money:** stolen funds, fraudulent transactions, drained accounts.
+- **Identity & safety:** account takeover, impersonation, stalking/doxxing from leaked
+  data, and for at-risk users (activists, journalists, abuse survivors) real physical
+  danger.
+- **Irreversibility — especially Web3:** a drained wallet or exploited contract is
+  *gone*. No bank to call, no chargeback, no reset. This is why the bar for care in
+  crypto is higher than anywhere else: you cannot "fix it later."
+
+**4. Governments / critical infrastructure / national security.**
+- Breaches of power, water, healthcare, telecom, transport, and financial market
+  infrastructure threaten public safety and economic stability, not just data.
+- Stolen crypto has repeatedly been attributed to state actors funding weapons and
+  sanctions evasion (e.g. the Lazarus Group and the Ronin/bridge thefts) — making DeFi
+  and bridge security a genuine national-security concern.
+- Government/defense data breaches enable espionage; election and civic-system
+  integrity is a democratic-stability issue.
+
+### III.2 Severity reasoning shortcut
+
+Severity ≈ **(worst realistic impact across the four groups) × (likelihood/ease of
+exploitation) × (reversibility)**, adjusted for how many users/assets are in the blast
+radius and whether it **chains** into something worse. A "medium" that chains to RCE or
+account takeover is reported at the severity of the *end* of the chain, with the chain
+shown.
+
+### III.3 Why the "assume a bypass" habit is the ethical high ground
+
+Attackers already think this way. The only question is whether a *defender/authorized
+researcher* finds the bypass first and gets it fixed, or whether a criminal/state actor
+finds it in production. Every control enumerated-and-broken in a lab or a bounty is a
+control that *won't* fail with real users' money and data on the line. That is the
+entire point of offensive security: break it on purpose, under authorization, so it
+can't be broken by surprise. The bypass mindset without the ethics (§0.2) is just
+crime; the ethics without the bypass mindset is just theater. Qarvis needs both.
+
+---
+
+# PART IV — QARVIS QUICK-REFERENCE CHECKLISTS
+
+Condensed triggers for fast reasoning during an engagement.
+
+### Web3 — for every contract/protocol, ask:
+- [ ] External call before state update? (reentrancy — incl. cross-fn / cross-contract / **read-only** view-as-oracle)
+- [ ] Every privileged fn: who can call it, what enforces it? Unprotected `initialize()`? `tx.origin`?
+- [ ] Price source: single pool / `slot0` / manipulable? TWAP window short? stale-feed checks?
+- [ ] Does any invariant break with a **flash loan** (infinite one-tx capital)?
+- [ ] Bridge/signature: all fields + nonce + chain-id + domain bound? forgeable? default/zero root after upgrade?
+- [ ] `ecrecover` rejects `address(0)`? low-`s` enforced? replay (nonce) protection?
+- [ ] `delegatecall` target trusted? proxy/impl storage layouts match? impl `_disableInitializers()`?
+- [ ] Governance: voting power snapshot before proposal? timelock? emergency fast-path?
+- [ ] `unchecked{}` / downcasts / assembly math with attacker-controlled values?
+- [ ] Low-level call / token transfer return value checked? fee-on-transfer/rebasing handled?
+- [ ] Randomness from block vars? revert-on-loss free retry?
+- [ ] Unbounded loop / push-payment DoS? first-depositor share inflation? infinite approvals?
+
+### Traditional web — for every input/endpoint, ask:
+- [ ] Input into a query? → SQLi (try boolean/time/UNION/OOB; then **every filter/WAF bypass**)
+- [ ] Input into a shell/file op? → command injection / path traversal / LFI (separator & obfuscation bypasses)
+- [ ] Input reflected into HTML/JS/attr? → XSS per context (+ WAF & **CSP bypass**)
+- [ ] Object reference (id/uuid/filename) I can swap? → **IDOR**; try method/verb, headers, path-normalization, mass assignment
+- [ ] State-changing request authed only by cookies? → CSRF (+ token/`SameSite` bypass)
+- [ ] App fetches a URL I control? → SSRF (+ IP-encoding/IPv6/DNS-rebind/redirect/gopher bypasses) → cloud metadata
+- [ ] Serialized blob I can tamper? → deserialization (gadget chains); XML input? → XXE (+ OOB/XInclude)
+- [ ] Auth/session/JWT/OAuth/SAML/MFA: forgeable, skippable, replayable? reset-poisoning via Host header?
+- [ ] Per-user limit / one-time action / balance? → **race condition** (single-packet parallel)
+- [ ] Any money/quantity/workflow assumption I can violate? → **business logic** (negative, zero, huge, out-of-order, replay)
+- [ ] CORS reflecting Origin + credentials? open redirect to chain? leaked secrets / `.git` / `.env`?
+- [ ] Always: can a low-sev finding **chain** into ATO / RCE / data breach?
+
+### Universal mantras
+1. **Assume a bypass exists — enumerate the known ones for this exact control.**
+2. **Map everything; the bug is where "A trusts B checked X" and nobody checked X.**
+3. **Chain low bugs into high impact; report at the end of the chain.**
+4. **Prove real-world impact across company / client / user / nation.**
+5. **Authorized scope only. Minimal, non-destructive PoC. Responsible disclosure.**
+
+---
+
+## Appendix A — Primary sources & further study
+
+Grounding references used and recommended for keeping this file current:
+
+- **OWASP** — Top 10, Web Security Testing Guide (WSTG), Cheat Sheet Series
+  (SSRF, Deserialization, XXE, CSRF, SQLi prevention).
+- **PortSwigger Web Security Academy** — labs/notes for XSS, CSRF, SSRF, SQLi,
+  access control, request smuggling, race conditions, JWT, OAuth, CORS.
+- **Smart contract** — SWC Registry; SCSVS; Trail of Bits *building-secure-contracts*;
+  Consensys smart-contract best practices; Immunefi bug writeups; *rekt.news*;
+  ChainSecurity / BlockSec / CertiK / Halborn post-mortems.
+- **PayloadsAllTheThings** and **HackTricks** for payload/bypass catalogs
+  (use as leads; verify against primaries).
+- **HackerOne Hacktivity** and disclosed reports for real traditional-web case studies.
+
+Case studies referenced in this file (verify exact figures against primary
+post-mortems before citing):
+- Reentrancy: The DAO (2016); CREAM/AMP ERC-777 (Aug 2021); read-only — dForce
+  (Feb 2023, ~$3.7M), Conic Finance (Jul 2023, ~$3.2M); Curve `get_virtual_price`
+  (ChainSecurity post-mortem).
+- Access control / proxy: Parity multisig (Jul & Nov 2017, ~513K ETH frozen).
+- Oracle / flash loan: bZx (Feb 2020); Mango Markets (Oct 2022, ~$114M, spot pump);
+  Beanstalk governance (Apr 2022, ~$182M, ~$1B Aave flash loan).
+- Bridges: Wormhole (Feb 2022, ~$326M, signature-verify bypass); Nomad (Aug 2022,
+  ~$190M, zero trusted root); Poly Network (Aug 2021, ~$611M, returned); Ronin
+  (Mar 2022, ~$625M, validator-key + leftover DAO delegation).
+- Web: Capital One (2019, SSRF → cloud metadata → ~100M records).
+
+> **Maintenance note for Qarvis:** techniques and especially *bypasses* evolve
+> constantly. Treat this file as a living brain: when a new bypass, case study, or
+> class appears in a reputable source, add it under the right section rather than
+> starting over. Last substantive research pass: 2026-10-10.
+
+---
+
+*End of knowledge base. This file encodes a reasoning posture for authorized security
+work only (see §0.2). Use it to think — not to harm.*
