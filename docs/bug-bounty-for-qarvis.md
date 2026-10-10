@@ -1482,3 +1482,362 @@ post-mortems before citing):
 
 *End of knowledge base. This file encodes a reasoning posture for authorized security
 work only (see §0.2). Use it to think — not to harm.*
+
+# PART V — MORE WEB VULNERABILITY CLASSES
+
+The first pass (Parts I–IV) covered the backbone. This part adds the classes that win
+a lot of real bounties and that a complete "attacker brain" must carry. Same format:
+what it is → how found → defenses → **bypasses** → why it matters. Numbering continues
+from §34.
+
+---
+
+### 35. Server-Side Template Injection (SSTI)
+
+**What it is.** User input is embedded into a server-side template that is then
+*evaluated* (not just rendered as data). Template engines (Jinja2/Flask, Twig, Freemarker,
+Velocity, Thymeleaf, ERB, Handlebars, Pug, Smarty, Mako) expose language/object access;
+if you can inject template syntax, you often reach **RCE**. Classic tell: `{{7*7}}`
+returns `49`.
+
+**How it's found.** Inject polyglot probes into anything that may be templated —
+names, email subjects/bodies, usernames rendered back, "custom message" fields,
+file names, PDF/report generators, error pages. Probe per engine:
+`${7*7}`, `{{7*7}}`, `<%= 7*7 %>`, `#{7*7}`, `{7*7}`, `@(7*7)`. A reflected math result
+confirms evaluation. Then fingerprint the engine (which probe worked, error strings)
+and escalate to object/class traversal.
+
+**Defenses.** Never concatenate user input into templates — pass it as **data/context
+variables**, not template source; use a **logic-less / sandboxed** engine
+(e.g. sandboxed Jinja, Handlebars without helpers); allowlist template names; keep the
+template compiler away from user input entirely.
+
+**Bypass techniques (against sandboxes/filters):**
+- **Sandbox escape via object traversal.** In Jinja2, reach Python internals:
+  `{{ ''.__class__.__mro__[1].__subclasses__() }}` → find a class that can spawn
+  processes (`subprocess.Popen`, `os`-bearing objects) → RCE. Equivalent gadget chains
+  exist for Freemarker (`freemarker.template.utility.Execute`), Velocity, Twig
+  (`_self`, `registerUndefinedFilterCallback` → `system`), Smarty, Ruby ERB.
+- **Attribute-filter bypass:** if `__class__`/`__globals__` are blocked, use
+  `request`, `config`, `lipsum`, `cycler`, `joiner`, `namespace` globals (Flask/Jinja)
+  or `|attr('__cl'+'ass__')` string-concat and `request.args`/`|attr()` indirection to
+  dodge keyword blocklists; hex/unicode escapes; `getattr` chains.
+- **Filter-based blocklist evasion:** split forbidden words (`__cla''ss__`), use
+  `|attr()`, `request['application']`, dictionary/`get` lookups, or
+  `{% ... %}` statement blocks when `{{ }}` is filtered.
+- **Blind SSTI:** no reflection → time-based (`sleep`) or OAST exfil via the engine's
+  HTTP/file primitives.
+
+**Real cases.** SSTI has produced pre-auth RCE in major platforms (Jinja2/Flask apps,
+Atlassian Confluence Freemarker/OGNL-adjacent issues, Shopify/Uber-class disclosures on
+HackerOne). It's a frequent "critical" on report leaderboards.
+
+**Why it matters.** SSTI is usually a straight line to **RCE** and full server
+compromise — among the highest-impact web bugs, with the same breach/pivot/regulatory
+stakes as command injection and deserialization.
+
+---
+
+### 36. NoSQL injection
+
+**What it is.** Injection into NoSQL datastores (MongoDB, CouchDB, etc.) where
+untrusted input becomes part of a query object or a server-side JS evaluation. Because
+queries are often JSON/BSON, operators like `$ne`, `$gt`, `$regex`, `$where`, `$in` can
+be smuggled in to subvert logic — classically an **auth bypass**:
+`{"user":"admin","pass":{"$ne":null}}` logs in without the password.
+
+**How it's found.** In JSON bodies, try replacing a string value with an operator
+object (`{"$ne":1}`, `{"$gt":""}`, `{"$regex":"^a"}`). In URL/form params, array/
+operator syntax (`user[$ne]=1`, `pass[$regex]=.*`). Look for behavior changes, boolean/
+regex blind extraction, and `$where`/`mapReduce` JS-eval sinks (→ possible RCE/DoS).
+
+**Defenses.** Treat input as data: type-check/cast to string, reject objects where
+scalars are expected; use parameterized/ODM query builders safely; disable server-side
+JS (`$where`, `mapReduce`); schema validation (e.g. reject keys starting with `$`/`.`);
+sanitize operator characters.
+
+**Bypass techniques:** send operators as **nested objects/arrays** when the app only
+sanitizes strings; **type juggling** (array vs string vs object) to defeat naive
+`typeof` checks; use `$regex`/`$where` for **blind boolean/time** extraction
+character-by-character when no direct output; bury `$`-keys in deeply nested JSON that
+a shallow sanitizer misses; exploit frameworks that auto-parse `a[$ne]=b` query strings
+into objects.
+
+**Why it matters.** Auth bypass → account/admin takeover, and full collection
+dump of user data — same breach/PII/regulatory consequences as SQLi, in the
+NoSQL-heavy modern stack where devs wrongly assume "NoSQL = no injection."
+
+---
+
+### 37. Prototype pollution (JavaScript / Node.js)
+
+**What it is.** In JS, objects inherit from `Object.prototype`. If an attacker can set
+a property named `__proto__` (or `constructor.prototype`) through an unsafe merge/clone/
+path-set, they pollute the **global prototype**, so *every* object suddenly has an
+attacker-controlled property. Impact: logic bypass (inject `isAdmin`/`isAuthenticated`),
+DoS, client-side **DOM XSS** gadget activation, and server-side **RCE** (polluting
+properties consumed by `child_process`, template engines, or config at spawn time).
+
+**How it's found.** **Server-side:** find deep-merge/clone/`extend`/query-parser code
+fed user JSON; send `{"__proto__":{"polluted":"x"}}` or
+`{"constructor":{"prototype":{"polluted":"x"}}}` and check if a fresh object gains
+`polluted`. **Client-side:** inject via URL params/hash parsed by vulnerable libraries;
+use known gadget chains to turn pollution into XSS. Tools: `ppfuzz`, DOM Invader
+(Burp) prototype-pollution scanning, source review of `lodash.merge`/`set`,
+`jQuery.extend(true,...)`, `deep-extend`, query-string parsers.
+
+**Defenses.** Block `__proto__`/`constructor`/`prototype` keys in merges; use
+`Object.create(null)` for untrusted maps; `Map` instead of plain objects;
+`Object.freeze(Object.prototype)`; schema validation; patched library versions;
+`--disable-proto` Node flag.
+
+**Bypass techniques:** if `__proto__` is filtered, use the `constructor.prototype`
+path; array-path notation (`a[__proto__][x]`); unicode/encoding of the key; polluting
+via nested arrays; and chaining to a **gadget** (a property the app reads later — e.g.
+a templating option, a shell argument/`NODE_OPTIONS`, or an HTML sink) so pollution
+becomes XSS/RCE even when the pollution itself looks harmless.
+
+**Real cases.** Widespread via Lodash (`CVE-2019-10744` and others), jQuery `extend`,
+and many Node libraries; chained to RCE in several server frameworks and to DOM XSS on
+major sites.
+
+**Why it matters.** A "set a weird property" bug escalates to auth bypass, XSS, or RCE
+across the enormous Node/JS ecosystem — and because it's prototype-wide, it corrupts
+code the developer never associated with user input.
+
+---
+
+### 38. LDAP, XPath & other query-language injections
+
+**What it is.** The SQLi pattern repeated in other query languages. **LDAP injection**
+into directory queries (common in enterprise login/search): `*)(uid=*))(|(uid=*` or
+`*` wildcards to bypass auth or enumerate the directory. **XPath/XQuery injection** into
+XML document queries: `' or '1'='1` equivalents (`or 1=1`, `or position()=1`) to read
+unauthorized nodes or bypass auth. Also **XQuery, Cypher (Neo4j), SPARQL, ORM/HQL/JPQL
+injection**.
+
+**How it's found/bypassed.** Inject the language's metacharacters/operators into any
+input reaching such a query; watch for auth bypass, broadened results, or errors.
+LDAP: `*`, `)(`, `|`, `&`, null-byte truncation; blind boolean extraction via filters.
+XPath: `or`, `and`, `string-length`, `substring` for blind char-by-char extraction
+(no table privileges to stop you — the whole XML doc is readable).
+
+**Defenses.** Parameterized/escaped queries per language (LDAP encoding of `*()\\NUL`,
+XPath variable binding), input allowlists, least privilege.
+
+**Why it matters.** Auth bypass and full directory/document disclosure — enterprise
+identity stores (LDAP/AD) are especially high-value: dumping them aids lateral movement
+across an entire organization.
+
+---
+
+### 39. CRLF injection / HTTP response splitting & header injection
+
+**What it is.** Unsanitized input containing `\r\n` (`%0d%0a`) injected into HTTP
+response headers (or logs, or emails). Lets an attacker inject new headers or a new
+response body: set malicious cookies, poison caches, add `Location`/open redirect,
+inject XSS into a split response, or forge log entries (**log injection/forging**).
+**Email header injection** (`\n` into a mail header) adds BCC/attachments/spoofed
+senders.
+
+**How it's found/bypassed.** Put `%0d%0a` (and `%0a`, `%E5%98%8A%E5%98%8D` overlong/
+unicode CRLF variants that some servers normalize) into anything reflected into headers:
+`Location`, `Set-Cookie`, redirect params, custom headers, filenames in
+`Content-Disposition`. If `\r`/`\n` are stripped, try unicode/overlong encodings and
+header-specific parsers.
+
+**Defenses.** Strip/reject CR/LF in header-bound values; use framework header APIs that
+encode; don't reflect raw input into headers or emails; validate redirect targets.
+
+**Why it matters.** Enables cache poisoning (mass cross-user impact), XSS, session
+fixation via injected cookies, phishing via injected redirects, and email spoofing —
+plus log forging that hampers incident response.
+
+---
+
+### 40. Host header injection & password-reset poisoning
+
+**What it is.** Apps that trust the incoming `Host` / `X-Forwarded-Host` header to build
+absolute URLs (password-reset links, email links, cache keys, "current domain" logic)
+can be fed an attacker domain. The lethal case: **password-reset poisoning** — the reset
+email's link is built from the attacker-controlled Host, so when the victim clicks, the
+token is sent to the attacker.
+
+**How it's found/bypassed.** Change `Host`, or add `X-Forwarded-Host`,
+`X-Host`, `X-Forwarded-Server`, duplicate `Host`, or absolute-URI request line; trigger
+a reset and inspect the generated link/email. Also drives routing-based SSRF and web
+cache poisoning (unkeyed Host).
+
+**Defenses.** Use a server-configured canonical/allowlisted domain for URL generation
+(never the request Host); validate `Host` against an allowlist; don't honor
+`X-Forwarded-*` unless from a trusted proxy.
+
+**Why it matters.** One-click **account takeover** of arbitrary users via reset-link
+theft; plus cache poisoning and SSRF — high impact from a header most devs never
+consider attacker-controlled.
+
+---
+
+### 41. Clickjacking (UI redressing)
+
+**What it is.** The target site is loaded in a transparent/obscured iframe over
+attacker bait, so the victim's clicks land on the real site's sensitive controls
+(change settings, confirm a transfer, grant an OAuth scope, delete account). Variants:
+**likejacking**, **cursorjacking**, and **drag-and-drop** data theft.
+
+**How it's found/bypassed.** Try to frame the target (`<iframe src=target>`); if it
+renders and sensitive one-click actions exist, it's exploitable. **Bypasses of weak
+framing defenses:** frame-busting JS is defeated by `sandbox` iframes (which can
+neutralize top-navigation) or `onbeforeunload` tricks; partial/misconfigured
+`X-Frame-Options`/CSP (e.g. `ALLOW-FROM` ignored by modern browsers, or
+`frame-ancestors` missing) leaves gaps.
+
+**Defenses.** `Content-Security-Policy: frame-ancestors 'none'|'self'` (the modern,
+browser-honored control), `X-Frame-Options: DENY/SAMEORIGIN` (legacy), `SameSite`
+cookies (blunt some flows), and requiring explicit re-auth/confirmation with
+unpredictable, non-framable steps for critical actions.
+
+**Why it matters.** Tricks users into performing privileged actions as themselves —
+account changes, fund transfers, OAuth consent — at scale via a lure page. Often the
+fallback when CSRF tokens hold.
+
+---
+
+### 42. Subdomain takeover & dangling DNS
+
+**What it is.** A DNS record (usually `CNAME`) points to a third-party service
+(GitHub Pages, S3, Heroku, Azure, Shopify, Fastly, etc.) that is no longer claimed. An
+attacker registers the unclaimed resource and now serves content on the company's
+subdomain — with all the trust (and often cookies/CORS/SSO scope) that implies.
+
+**How it's found.** Enumerate subdomains, resolve CNAMEs, look for "no such bucket/app/
+page" fingerprints on dangling targets; tools: `subjack`, `nuclei` takeover templates,
+`dnsReaper`. Verify by claiming the resource in a controlled PoC only.
+
+**Defenses.** Remove DNS records when decommissioning services; monitor for dangling
+CNAMEs; use verification records; claim/park resources.
+
+**Bypass/escalation.** A subdomain under the parent's cookie scope lets you steal
+`Domain=.site.com` cookies, bypass `SameSite` (same-site!), satisfy CORS/`*.site.com`
+allowlists, and host convincing phishing/OAuth-redirect targets — chaining a "low" DNS
+hygiene issue into session theft and ATO.
+
+**Why it matters.** Brand-trusted phishing, cookie/session theft across the org,
+CORS/OAuth bypass, and reputational damage — a classic low-effort, high-leverage bounty.
+
+---
+
+### 43. GraphQL-specific attacks
+
+**What it is.** GraphQL's flexibility creates its own surface on top of the generic
+IDOR/authz issues. Key classes: **introspection** exposing the full schema (hidden
+types/fields/mutations); **missing object/field-level authorization** (query any id,
+reach admin-only fields the REST layer protected); **batching/aliasing abuse** to brute
+force (OTPs, credentials, IDs) or bypass rate limits by sending hundreds of operations
+in one request; **nested-query DoS** (deeply recursive queries exhausting resources);
+**mutation discovery** of privileged actions; **injection** passed through resolvers to
+SQL/NoSQL.
+
+**How it's found.** Hit `/graphql`, `/graphql/console`, `/v1/graphql`; run
+introspection (`__schema`, `__type`); map queries/mutations; test each resolver for
+authz independently; try aliases (`a: login(...) b: login(...)`) for brute force; test
+depth/complexity limits. Tools: `graphql-cop`, `clairvoyance` (schema recovery even
+when introspection is off), InQL (Burp), `graphw00f`.
+
+**Defenses.** Disable introspection in prod; **enforce authz in every resolver**
+(don't rely on the gateway); query **depth/complexity limits** and cost analysis;
+disable/limit batching and aliasing; rate-limit by operation; persisted queries
+(allowlist).
+
+**Bypasses:** recover schema with `clairvoyance` when introspection is disabled;
+circumvent per-request rate limits via **aliasing/batching** (N attempts, 1 request);
+reach fields via alternate resolvers/edges when one path is protected; field
+duplication/fragment tricks; injection through resolver arguments.
+
+**Why it matters.** GraphQL concentrates data access; a single missing resolver check
+or an aliasing-based OTP brute force yields mass data exposure or account takeover,
+often across the whole API at once.
+
+---
+
+### 44. WebSocket & real-time security
+
+**What it is.** WebSocket handshakes and messages often skip the protections applied to
+HTTP. Issues: **Cross-Site WebSocket Hijacking (CSWSH)** — the WS handshake is a normal
+cross-origin request authed by cookies with no CSRF token and no `Origin` check, so an
+attacker page opens a socket as the victim and reads/sends messages; missing authz on
+individual WS messages; injection via WS data into XSS/SQL sinks; no rate limiting.
+
+**How it's found/bypassed.** Check whether the handshake validates `Origin` and uses an
+unpredictable token; if not, CSWSH. Replay/forge messages; tamper message fields for
+IDOR-over-WS; inject payloads into message content. Burp's WebSocket tools.
+
+**Defenses.** Validate `Origin` on the handshake, use CSRF tokens for the upgrade,
+authenticate and authorize **every message** (not just the handshake), input-validate
+message content, rate-limit.
+
+**Why it matters.** CSWSH is account/data takeover over the real-time channel; unauthz'd
+messages expose live data (chat, trading, telemetry) — the same stakes as HTTP IDOR/XSS
+on a channel devs often forget to secure.
+
+---
+
+### 45. Authentication-flow abuse: rate-limit, OTP, CAPTCHA & reset bypasses
+
+**What it is.** The surrounding auth machinery — throttling, OTP/2FA, CAPTCHA, lockout,
+reset — fails in characteristic ways that enable brute force and takeover even when the
+password check is sound.
+
+**Bypass techniques (the point):**
+- **Rate-limit / lockout bypass:** rotate `X-Forwarded-For`/`X-Real-IP`/
+  `X-Client-IP` if the limiter keys on a spoofable header; reset the counter by varying
+  case/trailing dot/path; use **GraphQL aliasing or HTTP/2 multiplexing** to send many
+  attempts per request; distribute across endpoints that share a limit poorly; race the
+  limiter (single-packet) before the counter commits.
+- **OTP/2FA bypass:** brute force weak/short OTPs with no attempt cap; **response
+  manipulation** (`"verified":false`→`true`); reuse/no-expiry OTPs; OTP leaked in the
+  response or a side endpoint; skip the 2FA step by calling the post-2FA endpoint
+  directly; backup-code/remember-device/"disable 2FA" flows with weaker checks; race on
+  verification; **status-code/length oracle** distinguishing right from wrong codes.
+- **CAPTCHA bypass:** CAPTCHA validated only client-side or not re-checked server-side;
+  token reusable across requests; missing on an alternate endpoint; removing the
+  parameter skips validation; outsourced-solver (for research only, within rules).
+- **Reset-token flaws:** predictable/sequential tokens, no expiry, reusable, not bound
+  to the account, leaked via Referer/Host poisoning (§40), or reset that doesn't
+  invalidate active sessions.
+
+**Defenses.** Server-side, identity-keyed rate limits and lockout (not header-keyed);
+long, single-use, expiring, attempt-capped OTP/reset tokens; server-side CAPTCHA
+verification with single-use tokens; enforce every auth step server-side.
+
+**Why it matters.** These are the *practical* path to mass account takeover —
+credential stuffing and OTP brute force are how real breaches happen even against
+"strong" password policies.
+
+---
+
+### 46. Dependency confusion & software supply chain
+
+**What it is.** Package managers can be tricked into pulling a **malicious public
+package** in place of an intended **internal/private** one (dependency confusion /
+namespace squatting), or a compromised dependency/build step injects code. Related:
+**typosquatting**, malicious post-install scripts, compromised CI/CD, leaked publish
+tokens, and unpinned/unverified dependencies.
+
+**How it's found.** Discover internal package names (leaked in source maps, JS bundles,
+error messages, public repos, `package.json`); check whether the registry resolves
+public over private by version; look for unclaimed internal names on public registries.
+For bounties: **only register a harmless proof package / use the program's defined
+method** — never ship anything that executes on victims.
+
+**Defenses.** Scoped packages + private-registry-first resolution; namespace
+reservation on public registries; lockfiles with integrity hashes; pin and verify
+dependencies; signed packages/provenance (SLSA, Sigstore); least-privilege CI tokens;
+review post-install scripts.
+
+**Why it matters.** Supply-chain compromise is the highest-leverage attack of the era:
+one malicious package runs in **every** downstream build and production environment —
+mass, cross-organization breach (SolarWinds, `event-stream`, countless npm/PyPI
+incidents). For companies and governments it's a systemic, trust-destroying risk.
+
+---
