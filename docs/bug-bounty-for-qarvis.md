@@ -2247,3 +2247,465 @@ spend time.
   the scarce asset; spend it on provable, payable impact.
 
 ---
+
+## VIII.5 Additional & deeper Web3 vulnerability classes
+
+Continuing the numbering (Part I covered §1–§16). Each class is tagged with its
+**Hunter Tier** (§VIII.3) so Qarvis knows how hard to chase it. Format stays:
+what → found → defenses → **bypasses** → tri-view impact.
+
+---
+
+### 47. Liquidation logic abuse & bad-debt creation  ·  **Hunter Tier: S/A**
+
+**What it is.** Lending/perp protocols liquidate unhealthy positions, paying
+liquidators a bonus. Flaws: **self-liquidation** for profit, liquidating at a
+manipulated price, **bad debt** left when collateral < debt (socialized onto other
+users/protocol), liquidation that can be **blocked** (DoS, so positions never close and
+go bad), or a bonus that lets a liquidator extract more than the shortfall.
+
+**How found.** Model the health-factor math and the liquidation path end to end. Ask:
+can I push a position unhealthy *and* liquidate it myself in one tx (with a flash
+loan)? Can I make the collateral mis-valued mid-liquidation (read-only reentrancy,
+§1)? Can I block liquidation of *my* position (revert on receive, §13)? Does partial
+liquidation round in my favor? Does the protocol handle a token that can't be
+transferred (blocklist) during liquidation?
+
+**Defenses.** Robust oracles (§49), caps on liquidation bonus, handle bad debt
+explicitly, no external-call dependence that an attacker can revert, incentivize timely
+liquidation, account for non-standard tokens.
+
+**Bypasses.** Flash-loan the whole cycle (crash price → liquidate → profit → repay);
+**read-only reentrancy** to misprice collateral during the liquidation call; grief the
+liquidation (make transfers to your position revert) so the protocol accrues bad debt;
+exploit rounding in partial-liquidation share math; use a fee-on-transfer/rebasing
+collateral so accounting diverges (§51).
+
+**Impact.** *Company:* insolvency and socialized bad debt that can cascade to a bank
+run. *User:* lenders eat losses; borrowers get unfairly liquidated. *Hunter:* direct
+fund-loss class with clear PoC on a fork — high, payable, common in every lending/perp
+program.
+
+---
+
+### 48. Reward, interest & accrual manipulation (double-claim, snapshot)  ·  **Tier S/A**
+
+**What it is.** Staking/yield/airdrop reward math that can be **claimed twice**, claimed
+for time you didn't stake, inflated by depositing right before a snapshot and leaving
+right after (**flash-stake**), or broken by updating accounting in the wrong order
+(claim before vs after `updateReward`). Interest accrual that can be front-run or
+compounded wrongly.
+
+**How found.** Trace the reward formula and *when* balances/indices update relative to
+the reward checkpoint. Can I enter → snapshot → claim → exit atomically? Does claiming
+reset the debt correctly, or can I re-enter and claim again (reentrancy via a reward
+token with hooks)? Are rewards per-second bounded by actual stake duration?
+
+**Defenses.** Checkpoint rewards on every balance change, accrue by elapsed time held,
+block flash-stake (snapshot a past block / require minimum lock), reentrancy-guard
+claim paths, correct order of `updateReward` before balance mutation.
+
+**Bypasses.** Flash-loan a huge stake across a snapshot; claim-reentrancy through a
+reward token's transfer hook; deposit/withdraw ordering to double-count; exploit an
+index that doesn't update on transfer so transferred positions claim the same rewards.
+
+**Impact.** *Company:* reward pool/treasury drained, token inflation. *User:* dilution,
+pool emptied before they claim. *Hunter:* frequent in staking/farm code, provable,
+pays well.
+
+---
+
+### 49. Oracle integration flaws (Chainlink staleness, L2 sequencer, decimals)  ·  **Tier A/S**
+
+**What it is.** Even with a "good" oracle (Chainlink), the *integration* is often buggy:
+not checking **staleness** (`updatedAt`/heartbeat) or round completeness
+(`answeredInRound >= roundId`); ignoring **min/maxAnswer** circuit-breaker bounds (so a
+real crash reads a floored price); **decimals mismatch** between feeds or between feed
+and token (8 vs 18); not checking the **L2 sequencer-uptime feed** (on Arbitrum/
+Optimism, if the sequencer is/was down, prices are stale and attackable); using a
+single feed with no fallback; or trusting `latestAnswer` which lacks freshness data.
+
+**How found.** Read every oracle read. Is `updatedAt` checked against a max age? Is a
+negative/zero price rejected? Are decimals normalized? On L2, is the sequencer feed
+checked with the grace period? Does the code assume 18 decimals when the feed is 8?
+
+**Defenses.** Validate `updatedAt`, `answeredInRound`, non-zero/positive answer,
+min/max bounds; normalize decimals; check L2 sequencer uptime + grace period; multiple
+feeds + deviation checks.
+
+**Bypasses (attacker view).** Trade against a **stale** price the protocol still trusts;
+wait for or exploit **sequencer downtime** on L2; exploit a **decimals** error to value
+collateral 10^10× off; push an asset past `minAnswer` so the protocol reads the floor,
+not the real (lower) price, and over-lends.
+
+**Impact.** *Company:* mispriced collateral → insolvency. *User:* liquidations at wrong
+prices, bad debt. *Hunter:* extremely common (devs copy-paste Chainlink without the
+checks), easy to spot in review, well-paid. **One of the highest ROI things to grep for.**
+
+---
+
+### 50. Vault share math — ERC-4626 inflation, donation & rounding  ·  **Tier A**
+
+**What it is.** (Expands §14.) Tokenized vaults mint **shares** for deposits priced by
+`totalAssets/totalShares`. Attacks: **first-depositor/inflation** (mint 1 wei share,
+then *donate* assets directly to the vault to spike share price, so a victim's deposit
+rounds to **0 shares** and the attacker redeems it); **rounding direction** that favors
+the redeemer; **donation** to break any balance-based `totalAssets`; **cross-vault**
+price confusion.
+
+**How found.** Is `totalAssets` balance-based (so a direct transfer moves it)? Is there
+a virtual-shares/offset or dead-shares mitigation? First deposit into an empty vault —
+does rounding let me zero out the next depositor? Does the protocol reuse the inflated
+share price as an oracle (read-only reentrancy, §1)?
+
+**Defenses.** OpenZeppelin ERC-4626 **virtual shares/assets** offset, minimum/dead
+initial deposit, round in the protocol's favor, track internal accounting instead of
+raw balance, don't price shares off raw balances.
+
+**Bypasses.** Target vaults deployed **without** the virtual-offset (many forks strip
+it); front-run the first real depositor with the inflation sequence; donation to move
+`totalAssets` even on "mitigated" vaults if any path reads raw balance.
+
+**Impact.** *Company:* every depositor's funds at risk; share accounting is the vault's
+whole premise. *User:* deposit → 0 shares → stolen. *Hunter:* classic, mechanical,
+provable; appears in nearly every vault/yield fork.
+
+---
+
+### 51. Non-standard ERC-20 assumptions  ·  **Tier A/B**
+
+**What it is.** Code that assumes every token behaves like a "nice" ERC-20 breaks on:
+**fee-on-transfer** (received < sent → accounting overcounts), **rebasing** (balance
+changes without a transfer), **no return value** (USDT — a naive `transfer` reverts or
+silently passes), **non-18 decimals** (USDC=6, WBTC=8), **approval race** (ERC-20
+`approve` front-running: change allowance 100→0→50 and a watcher spends 100+50),
+**blocklist** tokens (USDC/USDT can freeze an address mid-flow), **double-entrypoint**
+tokens, and **reentrant** tokens (ERC-777/callbacks, §1).
+
+**How found.** List every token the protocol accepts (or *any* token for a permissionless
+pool). For each assumption, find the code that breaks: does it measure actual received
+balance? use `SafeERC20`? normalize decimals? handle a transfer that reverts due to
+blocklist? guard against approval-race?
+
+**Defenses.** `SafeERC20`; measure balance delta for fee/rebasing tokens; normalize
+decimals; `increaseAllowance`/`decreaseAllowance` or approve-to-0 first; token
+allowlist for sensitive protocols; reentrancy guards for callback tokens.
+
+**Bypasses (attacker view).** Deposit a fee-on-transfer token into a protocol that
+credits the *requested* amount → withdraw the difference; use a rebasing token to
+desync accounting; exploit the approve-race to double-spend an allowance; deposit a
+token, get blocklisted, and brick a shared withdrawal path (DoS, §13).
+
+**Impact.** *Company:* accounting drift → slow or sudden insolvency, stuck funds.
+*User:* losses, frozen withdrawals. *Hunter:* very common in permissionless/multi-token
+protocols; mid-to-high payout depending on drain size.
+
+---
+
+### 52. L2 / rollup & cross-chain messaging bugs  ·  **Tier A/S**
+
+**What it is.** Rollup- and messaging-specific flaws: **cross-domain message replay**
+(a message consumable on multiple chains or more than once if nonce/chain-id not
+bound); trusting `msg.sender` across a bridge without checking the **aliased** L1→L2
+sender; **forced-inclusion / sequencer** assumptions; **withdrawal-finality** windows
+(optimistic rollups' ~7-day challenge period — act before finality); **data
+availability** failures; and L2 reorg/finality assumptions that don't hold.
+
+**How found.** For every cross-chain message handler, check: is the source chain-id
+bound? is there a consumed-nonce set? is the authorized sender verified *with address
+aliasing*? can a message be replayed on another deployment? Are finality/challenge
+windows respected before releasing funds?
+
+**Defenses.** Bind chain-id + unique nonce + verifying contract into every message;
+verify aliased cross-domain sender; respect challenge/finality windows; replay-protect;
+validate the full message payload.
+
+**Bypasses.** Replay a valid message on a sibling chain (missing chain-id); spoof the
+cross-domain sender if aliasing isn't checked; exploit a withdrawal before the fraud
+window closes if the protocol releases early.
+
+**Impact.** *Company:* bridge/L2 contract drained or desynced. *User:* funds stuck or
+stolen cross-chain. *Hunter:* high value (bridges/L2 hold huge TVL), fewer hunters
+understand it → **less competition, big payouts.**
+
+---
+
+### 53. Account abstraction (ERC-4337) bugs  ·  **Tier A**
+
+**What it is.** ERC-4337 smart-contract wallets separate **validation** from
+**execution** via `UserOperation`s, an **EntryPoint**, **bundlers**, and **paymasters**
+(who sponsor gas). New surface: **paymaster griefing/draining** (sponsor pays for ops
+that revert or exploit refund logic), validation/execution-phase rule violations
+(accessing banned opcodes/storage so bundlers get griefed), signature-aggregation bugs,
+and wallet-init/`initCode` takeover.
+
+**How found.** Review the wallet's `validateUserOp` and the paymaster's
+`validatePaymasterUserOp`/`postOp`: can an op pass validation but grief execution? can
+the paymaster be drained by ops that always revert after being sponsored? is the
+userOp nonce/replay handled? can `initCode` be front-run to seize a counterfactual
+wallet address?
+
+**Defenses.** Follow ERC-4337 storage/opcode rules, bound paymaster exposure, validate
+signatures and nonces correctly, protect counterfactual deployment.
+
+**Bypasses.** Craft userOps that pass validation but waste/steal sponsored gas; abuse
+`postOp` refund math; front-run `initCode` deployment; replay a userOp if nonce binding
+is weak.
+
+**Impact.** *Company:* paymaster/treasury drain, bundler DoS. *User:* wallet takeover or
+funded-gas theft. *Hunter:* newer, fewer experts, growing TVL → good niche payouts.
+
+---
+
+### 54. Merkle airdrop & claim bugs  ·  **Tier A/B**
+
+**What it is.** Airdrops/claims use a Merkle root; flaws let you **claim twice** (no
+claimed-bitmap or resettable), **claim as someone else** (leaf not bound to
+`msg.sender`), **front-run** a claim (claim isn't bound to the recipient so a watcher
+submits your proof for themselves), or exploit **leaf malleability** / wrong encoding.
+
+**How found.** Is the leaf `keccak(abi.encode(account, amount))` and is `account` forced
+to `msg.sender` (or signature-bound)? Is there a per-leaf claimed flag set atomically?
+Can the same proof be reused across epochs/roots? Is the proof front-runnable?
+
+**Defenses.** Bind leaf to the caller, set claimed-status atomically before transfer,
+unique root per campaign, standard double-hashed leaves to avoid second-preimage,
+reentrancy-guard.
+
+**Bypasses.** Reuse a proof if no claimed-flag; submit another user's `(account,amount)`
+proof and redirect if the contract transfers to a param instead of `msg.sender`;
+front-run a pending claim; second-preimage tricks on naive Merkle trees (intermediate
+node passed as a leaf).
+
+**Impact.** *Company:* airdrop pool drained, tokenomics wrecked. *User:* legit claimants
+get nothing. *Hunter:* common around token launches, clean PoC, decent payout.
+
+---
+
+### 55. NFT-specific bugs  ·  **Tier A/B**
+
+**What it is.** **Reentrancy via `_safeMint`/`safeTransferFrom`** (the `onERC721Received`/
+`onERC1155Received` callback re-enters mint/claim — e.g. mint more than the per-wallet
+cap by re-entering during the callback); **approval scams/`setApprovalForAll`** abuse;
+**royalty bypass** (marketplaces/transfers that skip creator royalties); **metadata**
+manipulation (mutable `tokenURI`, trait reveal front-running); missing access control
+on `mint`; **signature-based mint** replay.
+
+**How found.** Is `_safeMint` called **before** state (supply/minted-count) updates
+(CEI violation, §1)? Can the receive callback re-enter the mint? Is per-wallet/supply
+cap enforced against reentrancy? Are mint signatures replay-protected? Can metadata be
+changed post-sale?
+
+**Defenses.** CEI + reentrancy guard around mint, update counts before `_safeMint`,
+replay-protect mint signatures, immutable/committed metadata, enforce caps atomically.
+
+**Bypasses.** Re-enter `onERC721Received` to exceed caps or claim extra; replay a mint
+signature; exploit mutable metadata; royalty-bypass transfer paths.
+
+**Impact.** *Company:* mint economics broken, free/over-mints crater the collection.
+*User:* dilution, scam approvals drain wallets. *Hunter:* common in NFT drops; payout
+scales with mint value.
+
+---
+
+### 56. Precision loss, division-before-multiplication & invariant rounding  ·  **Tier B/A**
+
+**What it is.** Integer math with the operations in the wrong order (`a/b*c` loses
+precision vs `a*c/b`), rounding that consistently favors the user, or an **invariant**
+(`x*y=k`, share price) that can be nudged by rounding across many small operations.
+Balancer v2 (Nov 2025, ~$120M) combined an **access-control masquerade with a rounding
+error that let the invariant be manipulated** — rounding is not always "just dust."
+
+**How found.** Find every division; check order of operations and rounding direction;
+ask "does this round in the protocol's favor or mine?" and "can I repeat the favorable
+rounding many times (loop/flash-loan) to accumulate real value?" Check invariant
+calculations for manipulability.
+
+**Defenses.** Multiply before divide, round against the user, use fixed-point libs
+(not hand-rolled), enforce invariants with explicit `require`s and minimum thresholds.
+
+**Bypasses.** Loop a tiny favorable-rounding op thousands of times in one tx; combine
+rounding with another flaw (Balancer) to break the pool invariant; exploit
+`0`-rounding (deposit amounts that round your cost to 0 but your credit to >0).
+
+**Impact.** *Company:* slow bleed or, combined, a big drain. *User:* value siphoned.
+*Hunter:* needs care to prove real (not dust) impact — but when it compounds, pays big.
+
+---
+
+### 57. Gas griefing, return bombs & the 63/64 rule  ·  **Tier B**
+
+**What it is.** DoS/griefing via gas mechanics: an unbounded loop or a callee that
+**returns a huge payload** ("return bomb") to exhaust the caller's gas; the **63/64
+rule** (a call forwards at most 63/64 of remaining gas, so a nested call can be starved
+to fail while the outer tx succeeds — breaking `try/catch` assumptions); forcing
+expensive storage writes on others; **block stuffing**.
+
+**How found.** Loops over attacker-growable arrays; external calls whose return size is
+attacker-controlled and copied to memory; `try/catch` that assumes the inner call got
+enough gas; batch operations a single entry can brick.
+
+**Defenses.** Bound/paginate iteration; cap or ignore returndata size
+(`call` with fixed return, assembly `returndatacopy` limits); account for the 63/64 rule
+when a sub-call *must* succeed; pull-over-push.
+
+**Bypasses.** Grow the array; return a giant payload; starve a required sub-call via
+63/64 so a "cannot fail" assumption fails; revert in a callback to block a batch (§13).
+
+**Impact.** *Company/User:* frozen/blocked funds and functionality. *Hunter:* usually
+medium unless it **locks real funds** — then it climbs; often excluded if "just DoS,"
+so check the program.
+
+---
+
+### 58. Centralization, admin keys & upgrade/trust risks  ·  **Tier C (note, rarely paid)**
+
+**What it is.** The owner/multisig/upgrader *could* rug: upgrade to malicious logic,
+mint infinitely, pause withdrawals, change the oracle, drain via a privileged function.
+Technically real, often **catastrophic for users** — but **most bounty programs
+explicitly exclude** "admin could misbehave" as an **accepted trust assumption**.
+
+**Hunter guidance.** This is the textbook "critical for users, **$0 for the hunter**"
+case the operator flagged. **Note it, don't grind on it** — unless (a) the privileged
+function is reachable **without** the trusted key (then it's an access-control bug,
+Tier S, §2), (b) an upgrade **can be front-run/hijacked** (uninitialized proxy, §7 —
+Tier S), or (c) the program specifically rewards decentralization/trust findings.
+
+**Impact.** *Company:* reputational ("it's a rug risk"). *User:* total irreversible loss
+if the key is abused/stolen — and stolen admin keys are a **top real-world cause** of
+loss (DMM Bitcoin ~$300M, many Q1-2024 incidents). *Hunter:* usually informational/
+excluded → **deprioritize** for payout, but flag for the report's completeness.
+
+---
+
+### 59. Weak commit-reveal, front-runnable init & create2/metamorphic tricks  ·  **Tier B/A**
+
+**What it is.** Grab-bag of ordering/determinism bugs: **commit-reveal** schemes that
+leak the secret or allow reveal front-running (§11); **front-runnable initialization**
+(§2); **`create2` metamorphic contracts** (deploy, `selfdestruct`, redeploy *different*
+code at the **same address** — so a contract you "trusted" by address changes its code);
+**uninitialized storage pointers** (old Solidity) overwriting critical slots.
+
+**How found.** Does a commit leak enough to act on? Can init be front-run? Does the
+protocol trust a `create2` address assuming immutable code (metamorphic risk)? Any
+old-compiler uninitialized-pointer patterns?
+
+**Defenses.** Hide commits fully (salt + hash), guard init, don't trust `create2`
+addresses as immutable code, modern compiler + explicit storage.
+
+**Impact/Hunter.** Situational; metamorphic-trust bugs can be Tier S if they let you
+swap trusted logic; most others mid-tier.
+
+---
+
+## VIII.6 Real-world Web3 exploit catalog (study these like scripture)
+
+Each entry: **what broke → which class → impact**. Figures are from secondary post-mortems
+and vary by source — **verify against the primary write-up before citing**. The pattern
+is the point: *almost every one maps to a class above, and almost every one was a chain.*
+
+**The foundational ones:**
+- **The DAO — Jun 2016, ~3.6M ETH.** Reentrancy (§1). Caused the ETH/ETC hard fork.
+  *Impact:* split a blockchain in two; the event that created the discipline.
+- **Parity multisig — Jul 2017 (~$30M stolen) & Nov 2017 (~513K ETH frozen).**
+  Unprotected initializer / library `selfdestruct` (§2, §7). *Impact:* half a million
+  ETH **permanently frozen** — irreversible, no profit even to the attacker; thousands
+  of users' funds gone.
+
+**Oracle / flash-loan era:**
+- **bZx — Feb 2020.** First prominent flash-loan **oracle manipulation** (§3, §4);
+  single Kyber feed. *Impact:* proved "infinite capital for one tx" makes economic bugs
+  practical — changed DeFi threat modeling permanently.
+- **Harvest Finance — Oct 2020, ~$34M.** Flash-loan oracle manipulation of Curve pool
+  pricing (§3). *Impact:* depositors drained; bank-run on the vault.
+- **Beanstalk — Apr 2022, ~$182M.** **Governance** flash-loan capture (§8): ~$1B Aave
+  flash loan → >67% votes → emergency proposal drained the treasury in one tx.
+  *Impact:* protocol treasury gone instantly; the canonical governance-attack lesson.
+- **Mango Markets — Oct 2022, ~$114M.** **Spot-price oracle** pump with own capital
+  (§3) — no flash loan. *Impact:* protocol insolvent; later a landmark **criminal
+  conviction** (attacker's "legal trading strategy" defense failed) — a marker that
+  on-chain theft is prosecuted.
+
+**Reentrancy, modern:**
+- **CREAM Finance — Aug 2021, ~$18.8M (AMP).** Classic reentrancy via **ERC-777**
+  callback (§1). *Impact:* lender drained.
+- **Read-only reentrancy — dForce (Feb 2023, ~$3.7M), Conic (Jul 2023, ~$3.2M).**
+  View-function-as-oracle poisoning (§1). *Impact:* showed "view functions are
+  unguarded" is a top modern vector; several protocols patched pre-emptively.
+
+**Bridges (the biggest numbers):**
+- **Poly Network — Aug 2021, ~$611M (returned).** Arbitrary cross-contract call /
+  keeper reassignment (§5). *Impact:* then-largest DeFi hack; funds returned, but proved
+  bridges are the softest huge target.
+- **Wormhole — Feb 2022, ~$326M.** **Signature-verification bypass** (§5, §6); 120k
+  wETH minted unbacked. *Impact:* Jump Crypto backstopped it; wETH nearly depegged
+  across chains.
+- **Ronin — Mar 2022, ~$625M.** 4 validator keys phished + a **stale DAO delegation**
+  for the 5th (§5; key-mgmt/governance, not code). *Impact:* Axie ecosystem gutted;
+  attributed to the **Lazarus Group** — i.e. **nation-state funding**, a national-
+  security dimension.
+- **Nomad — Aug 2022, ~$190M.** Trusted Merkle root initialized to **zero** after an
+  upgrade (§5). *Impact:* a **free-for-all** — hundreds copy-pasted the exploit;
+  demonstrated how one bad init destroys all proofs.
+
+**Recent (2024–2025) — study the freshest patterns:**
+- **DMM Bitcoin — May 2024, ~$300M.** Likely **private-key compromise** (§58 trust/key
+  mgmt). *Impact:* exchange collapse; keys, not code.
+- **Bybit — Feb 2025, ~$1.4B (largest ever).** **Supply-chain attack on signing
+  infrastructure** (§46-adjacent): signers tricked into approving malicious txs via
+  compromised UI. *Impact:* CEX, not DeFi — but the lesson is that the **signing
+  path/UI** is in scope; attributed to DPRK.
+- **Cetus (Sui DEX) — May 2025, ~$223M.** **Integer overflow** via a flawed overflow
+  check (§9). *Impact:* a reminder that math bugs still cause nine-figure losses on
+  newer chains/VMs.
+- **GMX — Jul 2025, ~$42M.** **Reentrancy introduced by a patch** for an earlier bug,
+  enabling average-price manipulation (§1, §3). *Impact:* **patches are prime hunting
+  ground** — the fix created the hole.
+- **Balancer v2 — Nov 2025, ~$120M.** **Access-control masquerade + rounding/invariant
+  manipulation** (§2, §56); composability spread damage to integrators. *Impact:*
+  rounding "dust" + authz = nine figures, and **money-lego contagion** in action.
+
+**Web2-of-Web3:**
+- **Capital One — 2019, ~100M records (SSRF → cloud metadata).** Not on-chain, but the
+  canonical **SSRF → IAM credential theft** (§20) that also haunts Web3 infra/dApps.
+
+**Macro context (why this is the arena to hunt):** stolen-crypto totals hit roughly
+**$2.2–3B in 2024** and **~$4B in 2025** (Chainalysis/PeckShield estimates). Top
+real-world root causes: **private-key/signing compromise**, **access control**,
+**reentrancy**, **oracle/price manipulation**, and **bad math** — and **personal-wallet
+compromises** (phishing, malicious approvals, §15) have surged to a large share of all
+losses. **DPRK-linked actors** account for a large fraction of Web3 theft — which is
+exactly why finding these bugs first, as a white-hat, has stakes beyond the bounty.
+
+---
+
+## VIII.7 ✅ DONE WITH WEB3
+
+Web3 coverage is now comprehensive: **§1–§16** (core critical→low) and **§47–§59**
+(deeper/additional classes), plus the infrastructure model (§VIII.1), the bounty
+economics (§VIII.2), the **hunter-first priority lens** (§VIII.3), the impact tri-view
+(§VIII.4), and the real-world case catalog (§VIII.6). Every class carries detection,
+defenses, **bypasses**, impact for company/user/hunter, and a hunter-priority tier.
+
+**Web3 hunter's one-screen summary:**
+1. **Hunt where the TVL is**, on **new code and recent patches**, reading **prior
+   audits** to find what they missed.
+2. **Tier S first:** direct theft, insolvency, unbacked mint, permanent freeze —
+   reentrancy (incl. read-only), access control, oracle+flashloan, bridges, delegatecall,
+   governance.
+3. **Think invariants + whole transactions; fork-test; ship the first clean provable
+   PoC.**
+4. **Skip the unpaid stuff** (centralization/admin-key risk, theoretical, gas-nits) —
+   note it, don't grind it.
+5. **Rules are sacred:** fork PoCs only, never touch live funds, disclose through the
+   program. Reputation is your real bankroll.
+
+> **NEXT: web ("web4"/normal web) — the OWASP world.** Parts II and V already cover the
+> web bug classes (SQLi, XSS, IDOR/access control, CSRF, SSRF, auth, RCE chains, SSTI,
+> NoSQLi, prototype pollution, and more). The next expansion pass will add, in the same
+> hunter-first style: an **OWASP Top 10 (2021 → current) walk-through**, a **web-specific
+> bounty economics + hunter priority lens** (what pays on HackerOne/Bugcrowd vs what's
+> N/A), **per-class real-world case catalog**, and deeper **chaining playbooks**. Say
+> the word and I'll continue with web.
+
+---
